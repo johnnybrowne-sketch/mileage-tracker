@@ -33,7 +33,6 @@ import { getProfileForUser } from "../services/profileService";
 import { getProperties } from "../services/propertyService";
 import { getWorkerVehicles } from "../services/vehicleService";
 import {
-  calculateEntryMiles,
   calculateMilesFromOdometer,
   deleteMileageEntry,
   formatMonthKey,
@@ -123,6 +122,13 @@ export default function WorkerDashboard() {
   const [uploadingSheet, setUploadingSheet] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [uploadSuccess, setUploadSuccess] = useState("");
+
+  const [paperDraftEntries, setPaperDraftEntries] = useState([]);
+  const [convertingUploadId, setConvertingUploadId] = useState("");
+  const [savingDraftUploadId, setSavingDraftUploadId] = useState("");
+  const [submittingDraftUploadId, setSubmittingDraftUploadId] = useState("");
+  const [draftError, setDraftError] = useState("");
+  const [draftSuccess, setDraftSuccess] = useState("");
 
   const calculatedMiles = useMemo(() => {
     return calculateMilesFromOdometer(form.startOdometer, form.endOdometer);
@@ -224,6 +230,11 @@ export default function WorkerDashboard() {
         { event: "*", schema: "public", table: "paper_sheet_uploads" },
         scheduleRealtimeRefresh
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "paper_sheet_draft_entries" },
+        scheduleRealtimeRefresh
+      )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR") {
           console.warn(
@@ -321,12 +332,14 @@ export default function WorkerDashboard() {
       propertyList,
       workerMessages,
       workerPaperUploads,
+      workerDraftEntries,
     ] = await Promise.all([
       getWorkerMileageEntries(workerId),
       getWorkerVehicles(workerId),
       getProperties(),
       getWorkerMessages(workerId),
       getWorkerPaperSheetUploads(workerId),
+      getWorkerPaperSheetDraftEntries(workerId),
     ]);
 
     setEntries(workerEntries);
@@ -334,6 +347,7 @@ export default function WorkerDashboard() {
     setProperties(propertyList);
     setMessages(workerMessages);
     setPaperUploads(workerPaperUploads);
+    setPaperDraftEntries(workerDraftEntries);
 
     return {
       workerEntries,
@@ -341,6 +355,7 @@ export default function WorkerDashboard() {
       propertyList,
       workerMessages,
       workerPaperUploads,
+      workerDraftEntries,
     };
   }
 
@@ -463,18 +478,12 @@ export default function WorkerDashboard() {
 
     setEditForm({
       id: entry.id,
-      entryDate: toInputDateValue(entry.entry_date),
-      vehicleName: formatVehicleNameForDisplay(entry.vehicle || "", profile),
-      propertyCode: entry.property_code || "",
-      startOdometer:
-        entry.start_odometer !== null && entry.start_odometer !== undefined
-          ? String(entry.start_odometer)
-          : "",
-      endOdometer:
-        entry.end_odometer !== null && entry.end_odometer !== undefined
-          ? String(entry.end_odometer)
-          : "",
-      purpose: entry.purpose || "",
+      entryDate: toInputDateValue(getEntryDate(entry)),
+      vehicleName: formatVehicleNameForDisplay(getEntryVehicle(entry), profile),
+      propertyCode: getEntryPropertyCode(entry),
+      startOdometer: stringifyValue(getEntryStartOdometer(entry)),
+      endOdometer: stringifyValue(getEntryEndOdometer(entry)),
+      purpose: getEntryPurpose(entry),
     });
   }
 
@@ -511,30 +520,28 @@ export default function WorkerDashboard() {
         throw new Error("Please select a property from the suggestions.");
       }
 
-      const updatePayload = {
-        entry_date: editForm.entryDate,
-        vehicle: editForm.vehicleName,
-        property_code: selectedProperty?.property_code || editForm.propertyCode,
-        property_display:
-          selectedProperty?.display_label ||
-          selectedProperty?.display_name ||
-          selectedProperty?.property_code ||
-          "",
-        start_odometer: Number(editForm.startOdometer),
-        end_odometer: Number(editForm.endOdometer),
-        purpose: editForm.purpose || "",
-      };
+      const updatePayload = buildWorkerMileageEntryUpdatePayload({
+        entry: editingEntry,
+        form: editForm,
+        property: selectedProperty,
+      });
 
-      const { error } = await supabase
-        .from("mileage_entries")
-        .update(updatePayload)
-        .eq("id", editingEntry.id);
+      const updatedEntry = await updateMileageEntryRow(
+        editingEntry.id,
+        updatePayload
+      );
 
-      if (error) {
-        throw error;
+      await refreshAllWorkerData(profile.id);
+
+      const updatedDate =
+        getEntryDate(updatedEntry) ||
+        editForm.entryDate ||
+        getEntryDate(editingEntry);
+
+      if (updatedDate) {
+        setSelectedMonth(getMonthKeyFromDate(updatedDate));
       }
 
-      await refreshEntries(profile.id);
       setEditSuccess("Mileage entry updated successfully.");
 
       setTimeout(() => {
@@ -650,6 +657,12 @@ export default function WorkerDashboard() {
     const freshUploads = await getWorkerPaperSheetUploads(workerId);
     setPaperUploads(freshUploads);
     return freshUploads;
+  }
+
+  async function refreshPaperDraftEntries(workerId) {
+    const freshDraftEntries = await getWorkerPaperSheetDraftEntries(workerId);
+    setPaperDraftEntries(freshDraftEntries);
+    return freshDraftEntries;
   }
 
   function handlePaperSheetFileChange(event) {
@@ -797,6 +810,316 @@ export default function WorkerDashboard() {
     } catch (error) {
       console.error(error);
       setUploadError(error?.message || "Unable to delete upload.");
+    }
+  }
+
+  async function handleConvertPaperUpload(upload) {
+    if (!profile?.id) {
+      setDraftError("Worker profile is missing.");
+      return;
+    }
+
+    if (!upload?.id) {
+      setDraftError("Upload is missing.");
+      return;
+    }
+
+    setConvertingUploadId(upload.id);
+    setDraftError("");
+    setDraftSuccess("");
+
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "convert-paper-sheet",
+        {
+          body: {
+            uploadId: upload.id,
+          },
+        }
+      );
+
+      if (error) throw error;
+
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
+      await Promise.all([
+        refreshPaperUploads(profile.id),
+        refreshPaperDraftEntries(profile.id),
+      ]);
+
+      setDraftSuccess(
+        "AI conversion finished. Please review and edit the draft rows before submitting."
+      );
+    } catch (error) {
+      console.error(error);
+      setDraftError(
+        error?.message ||
+          "AI conversion failed. Please check the Edge Function logs."
+      );
+    } finally {
+      setConvertingUploadId("");
+    }
+  }
+
+  function updatePaperDraftEntry(draftId, field, value) {
+    setPaperDraftEntries((currentRows) =>
+      currentRows.map((row) => {
+        if (String(row.id) !== String(draftId)) {
+          return row;
+        }
+
+        const nextRow = {
+          ...row,
+          [field]: value,
+        };
+
+        if (field === "start_odometer" || field === "end_odometer") {
+          const start = Number(
+            field === "start_odometer" ? value : nextRow.start_odometer
+          );
+          const end = Number(
+            field === "end_odometer" ? value : nextRow.end_odometer
+          );
+
+          if (!Number.isNaN(start) && !Number.isNaN(end) && end >= start) {
+            nextRow.miles = end - start;
+          }
+        }
+
+        return nextRow;
+      })
+    );
+
+    setDraftError("");
+    setDraftSuccess("");
+  }
+
+  function handleAddPaperDraftRow(upload) {
+    if (!profile?.id || !upload?.id) return;
+
+    const uploadRows = paperDraftEntries.filter((row) => {
+      return String(row.upload_id) === String(upload.id);
+    });
+
+    const lastRow = uploadRows[uploadRows.length - 1];
+
+    const newRow = {
+      id: "new-" + Date.now(),
+      upload_id: upload.id,
+      worker_id: profile.id,
+      entry_number: uploadRows.length + 1,
+      entry_date: "",
+      vehicle: lastRow?.vehicle || "",
+      property_text: "",
+      property_code: "",
+      start_odometer: "",
+      end_odometer: "",
+      miles: "",
+      purpose: "",
+      ai_confidence: null,
+      needs_review: true,
+      is_new: true,
+    };
+
+    setPaperDraftEntries((currentRows) => [...currentRows, newRow]);
+  }
+
+  async function handleDeletePaperDraftRow(row) {
+    const confirmed = window.confirm("Delete this draft row?");
+
+    if (!confirmed) return;
+
+    setDraftError("");
+    setDraftSuccess("");
+
+    try {
+      if (String(row.id).startsWith("new-")) {
+        setPaperDraftEntries((currentRows) =>
+          currentRows.filter((item) => String(item.id) !== String(row.id))
+        );
+        return;
+      }
+
+      const { error } = await supabase
+        .from("paper_sheet_draft_entries")
+        .delete()
+        .eq("id", row.id);
+
+      if (error) throw error;
+
+      await refreshPaperDraftEntries(profile.id);
+    } catch (error) {
+      console.error(error);
+      setDraftError(error?.message || "Unable to delete draft row.");
+    }
+  }
+
+  async function handleSavePaperDraftRows(uploadId) {
+    if (!profile?.id) {
+      setDraftError("Worker profile is missing.");
+      return;
+    }
+
+    const rowsForUpload = paperDraftEntries.filter((row) => {
+      return String(row.upload_id) === String(uploadId);
+    });
+
+    setSavingDraftUploadId(uploadId);
+    setDraftError("");
+    setDraftSuccess("");
+
+    try {
+      const existingRows = rowsForUpload.filter((row) => {
+        return !String(row.id).startsWith("new-");
+      });
+
+      const newRows = rowsForUpload.filter((row) => {
+        return String(row.id).startsWith("new-");
+      });
+
+      await Promise.all(
+        existingRows.map((row) => {
+          return supabase
+            .from("paper_sheet_draft_entries")
+            .update(buildDraftEntryPayload(row))
+            .eq("id", row.id);
+        })
+      ).then((results) => {
+        const failedResult = results.find((result) => result.error);
+
+        if (failedResult?.error) {
+          throw failedResult.error;
+        }
+      });
+
+      if (newRows.length > 0) {
+        const { error: insertError } = await supabase
+          .from("paper_sheet_draft_entries")
+          .insert(
+            newRows.map((row) => ({
+              ...buildDraftEntryPayload(row),
+              upload_id: uploadId,
+              worker_id: profile.id,
+            }))
+          );
+
+        if (insertError) throw insertError;
+      }
+
+      await refreshPaperDraftEntries(profile.id);
+      setDraftSuccess("Draft rows saved successfully.");
+    } catch (error) {
+      console.error(error);
+      setDraftError(error?.message || "Unable to save draft rows.");
+    } finally {
+      setSavingDraftUploadId("");
+    }
+  }
+
+  async function handleSubmitDraftEntries(upload) {
+    if (!profile?.id) {
+      setDraftError("Worker profile is missing.");
+      return;
+    }
+
+    const rowsForUpload = paperDraftEntries.filter((row) => {
+      return String(row.upload_id) === String(upload.id);
+    });
+
+    if (rowsForUpload.length === 0) {
+      setDraftError("There are no draft rows to submit.");
+      return;
+    }
+
+    const invalidRow = rowsForUpload.find((row) => {
+      const selectedProperty = properties.find((property) => {
+        return String(property.property_code) === String(row.property_code);
+      });
+
+      return (
+        !row.entry_date ||
+        !row.vehicle ||
+        !row.property_code ||
+        !selectedProperty ||
+        row.start_odometer === "" ||
+        row.start_odometer === null ||
+        row.start_odometer === undefined ||
+        row.end_odometer === "" ||
+        row.end_odometer === null ||
+        row.end_odometer === undefined
+      );
+    });
+
+    if (invalidRow) {
+      setDraftError(
+        "Please complete every draft row before submitting. Each row needs date, vehicle, property code from the property list, start odo, and end odo."
+      );
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Submit these converted rows as final mileage entries?"
+    );
+
+    if (!confirmed) return;
+
+    setSubmittingDraftUploadId(upload.id);
+    setDraftError("");
+    setDraftSuccess("");
+
+    try {
+      await handleSavePaperDraftRows(upload.id);
+
+      for (const row of rowsForUpload) {
+        const selectedProperty = properties.find((property) => {
+          return String(property.property_code) === String(row.property_code);
+        });
+
+        await saveWorkerMileageEntry({
+          profile,
+          entryDate: row.entry_date,
+          vehicleName: row.vehicle,
+          propertyCode: selectedProperty.property_code,
+          propertyDisplay:
+            selectedProperty.display_label ||
+            selectedProperty.display_name ||
+            selectedProperty.property_code,
+          startOdometer: row.start_odometer,
+          endOdometer: row.end_odometer,
+          purpose: row.purpose || "",
+        });
+      }
+
+      const { error: uploadUpdateError } = await supabase
+        .from("paper_sheet_uploads")
+        .update({
+          ai_status: "submitted",
+          status: "converted",
+        })
+        .eq("id", upload.id);
+
+      if (uploadUpdateError) throw uploadUpdateError;
+
+      await Promise.all([
+        refreshEntries(profile.id),
+        refreshPaperUploads(profile.id),
+        refreshPaperDraftEntries(profile.id),
+      ]);
+
+      setDraftSuccess(
+        "Converted paper sheet rows were submitted as final mileage entries."
+      );
+      setActiveView("history");
+    } catch (error) {
+      console.error(error);
+      setDraftError(
+        error?.message ||
+          "Unable to submit converted entries. Please review the draft rows."
+      );
+    } finally {
+      setSubmittingDraftUploadId("");
     }
   }
 
@@ -948,8 +1271,21 @@ export default function WorkerDashboard() {
                 uploadingSheet={uploadingSheet}
                 uploadError={uploadError}
                 uploadSuccess={uploadSuccess}
+                draftEntries={paperDraftEntries}
+                properties={properties}
+                convertingUploadId={convertingUploadId}
+                savingDraftUploadId={savingDraftUploadId}
+                submittingDraftUploadId={submittingDraftUploadId}
+                draftError={draftError}
+                draftSuccess={draftSuccess}
                 onOpenUpload={handleOpenPaperUpload}
                 onDeleteUpload={handleDeletePaperUpload}
+                onConvertUpload={handleConvertPaperUpload}
+                onUpdateDraftEntry={updatePaperDraftEntry}
+                onAddDraftRow={handleAddPaperDraftRow}
+                onDeleteDraftRow={handleDeletePaperDraftRow}
+                onSaveDraftRows={handleSavePaperDraftRows}
+                onSubmitDraftEntries={handleSubmitDraftEntries}
               />
             )}
 
@@ -1851,8 +2187,21 @@ function UploadSheetView({
   uploadingSheet,
   uploadError,
   uploadSuccess,
+  draftEntries,
+  properties,
+  convertingUploadId,
+  savingDraftUploadId,
+  submittingDraftUploadId,
+  draftError,
+  draftSuccess,
   onOpenUpload,
   onDeleteUpload,
+  onConvertUpload,
+  onUpdateDraftEntry,
+  onAddDraftRow,
+  onDeleteDraftRow,
+  onSaveDraftRows,
+  onSubmitDraftEntries,
 }) {
   return (
     <section className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
@@ -1864,7 +2213,7 @@ function UploadSheetView({
         <SectionTitle
           eyebrow="Paper Sheet Upload"
           title="Upload Mileage Form"
-          text="Upload a photo or PDF of a paper mileage sheet. Admin will review it and update the status in real time."
+          text="Upload a photo or PDF of a paper mileage sheet. After uploading, run AI conversion and review the editable draft rows before submitting them as final mileage entries."
         />
 
         <form onSubmit={onUpload} className="mt-6 space-y-5">
@@ -1952,107 +2301,383 @@ function UploadSheetView({
         <SectionTitle
           eyebrow="Upload History"
           title="Your Paper Sheets"
-          text="Track submitted paper sheets and review admin status updates."
+          text="Run AI conversion, review editable draft rows, then submit the corrected rows as final mileage entries."
         />
 
-        <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200">
-          <div className="max-h-[680px] overflow-auto">
-            <table className="w-full min-w-[980px] border-collapse text-left text-sm">
-              <thead className="bg-slate-50 text-slate-600">
-                <tr>
-                  <TableHeader>Uploaded</TableHeader>
-                  <TableHeader>File</TableHeader>
-                  <TableHeader>Month</TableHeader>
-                  <TableHeader>Status</TableHeader>
-                  <TableHeader>Notes</TableHeader>
-                  <TableHeader>Admin Notes</TableHeader>
-                  <TableHeader>Action</TableHeader>
-                </tr>
-              </thead>
+        {draftError && <div className="mt-5"><AlertBox type="error" message={draftError} /></div>}
+        {draftSuccess && <div className="mt-5"><AlertBox type="success" message={draftSuccess} /></div>}
 
-              <tbody className="divide-y divide-slate-100">
-                {uploads.length > 0 ? (
-                  uploads.map((upload) => (
-                    <tr key={upload.id} className="bg-white">
-                      <td className="px-4 py-4 font-semibold text-slate-700">
-                        {formatDate(upload.created_at)}
-                      </td>
+        <div className="mt-6 space-y-5">
+          {uploads.length > 0 ? (
+            uploads.map((upload) => {
+              const uploadDraftRows = draftEntries
+                .filter((row) => String(row.upload_id) === String(upload.id))
+                .sort((first, second) => {
+                  return Number(first.entry_number || 0) - Number(second.entry_number || 0);
+                });
 
-                      <td className="px-4 py-4">
-                        <p className="max-w-[220px] truncate font-black text-slate-950">
+              const draftTotalMiles = uploadDraftRows.reduce((total, row) => {
+                return total + Number(row.miles || 0);
+              }, 0);
+
+              const isConverting = convertingUploadId === upload.id;
+              const isSaving = savingDraftUploadId === upload.id;
+              const isSubmitting = submittingDraftUploadId === upload.id;
+              const isSubmitted = upload.ai_status === "submitted" || upload.status === "converted";
+
+              return (
+                <div
+                  key={upload.id}
+                  className="overflow-hidden rounded-3xl border border-slate-200 bg-white"
+                >
+                  <div className="border-b border-slate-100 bg-slate-50 p-5">
+                    <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-start">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <PaperUploadStatusBadge status={upload.status} />
+                          <AiStatusBadge status={upload.ai_status} />
+                        </div>
+
+                        <h3 className="mt-3 max-w-xl break-words text-lg font-black text-slate-950">
                           {upload.file_name}
+                        </h3>
+
+                        <p className="mt-1 text-sm font-semibold text-slate-500">
+                          Uploaded {formatDate(upload.created_at)} • {formatPaperUploadMonth(upload.month_key)} • {formatFileSize(upload.file_size)}
                         </p>
-                        <p className="mt-1 text-xs font-semibold text-slate-500">
-                          {formatFileSize(upload.file_size)}
-                        </p>
-                      </td>
 
-                      <td className="px-4 py-4 text-slate-600">
-                        {formatPaperUploadMonth(upload.month_key)}
-                      </td>
+                        {upload.notes && (
+                          <p className="mt-3 max-w-3xl rounded-2xl bg-white p-3 text-sm leading-6 text-slate-600 ring-1 ring-slate-200">
+                            {upload.notes}
+                          </p>
+                        )}
 
-                      <td className="px-4 py-4">
-                        <PaperUploadStatusBadge status={upload.status} />
-                      </td>
+                        {upload.ai_error && (
+                          <p className="mt-3 rounded-2xl bg-red-50 p-3 text-sm font-semibold leading-6 text-red-700">
+                            {upload.ai_error}
+                          </p>
+                        )}
+                      </div>
 
-                      <td className="max-w-[240px] px-4 py-4 text-slate-600">
-                        <p className="line-clamp-4 leading-6">
-                          {upload.notes || "—"}
-                        </p>
-                      </td>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onOpenUpload(upload)}
+                          className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100"
+                        >
+                          <FileUp size={14} />
+                          Open
+                        </button>
 
-                      <td className="max-w-[240px] px-4 py-4 text-slate-600">
-                        <p className="line-clamp-4 leading-6">
-                          {upload.admin_notes || "—"}
-                        </p>
-                      </td>
+                        <button
+                          type="button"
+                          disabled={isConverting || isSubmitted}
+                          onClick={() => onConvertUpload(upload)}
+                          className="inline-flex items-center gap-2 rounded-xl bg-violet-50 px-3 py-2 text-xs font-black text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <Sparkles size={14} />
+                          {isConverting ? "Converting..." : "Convert With AI"}
+                        </button>
 
-                      <td className="px-4 py-4">
+                        <button
+                          type="button"
+                          onClick={() => onDeleteUpload(upload)}
+                          className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100"
+                        >
+                          <Trash2 size={14} />
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      <ReportMiniCard
+                        label="Detected Total"
+                        value={formatMiles(upload.total_mileage_detected || 0)}
+                      />
+                      <ReportMiniCard
+                        label="Draft Row Total"
+                        value={formatMiles(draftTotalMiles)}
+                      />
+                      <ReportMiniCard
+                        label="Draft Rows"
+                        value={uploadDraftRows.length}
+                      />
+                    </div>
+                  </div>
+
+                  {uploadDraftRows.length > 0 ? (
+                    <div className="p-5">
+                      <div className="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-center">
+                        <div>
+                          <h4 className="font-black text-slate-950">
+                            Editable AI Draft Rows
+                          </h4>
+                          <p className="mt-1 text-sm leading-6 text-slate-500">
+                            Review and correct every field before submitting.
+                            Property Code must match a property in the system.
+                          </p>
+                        </div>
+
                         <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
-                            onClick={() => onOpenUpload(upload)}
-                            className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100"
+                            disabled={isSubmitted}
+                            onClick={() => onAddDraftRow(upload)}
+                            className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            <FileUp size={14} />
-                            Open
+                            Add Row
                           </button>
 
                           <button
                             type="button"
-                            onClick={() => onDeleteUpload(upload)}
-                            className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100"
+                            disabled={isSaving || isSubmitted}
+                            onClick={() => onSaveDraftRows(upload.id)}
+                            className="rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            <Trash2 size={14} />
-                            Delete
+                            {isSaving ? "Saving..." : "Save Draft"}
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isSubmitting || isSubmitted}
+                            onClick={() => onSubmitDraftEntries(upload)}
+                            className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {isSubmitting ? "Submitting..." : isSubmitted ? "Submitted" : "Submit Entries"}
                           </button>
                         </div>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan="7" className="px-6 py-12 text-center">
-                      <div className="mx-auto max-w-sm">
-                        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                          <FileUp size={28} />
-                        </div>
-                        <h3 className="mt-4 text-lg font-black text-slate-950">
-                          No Uploads Yet
-                        </h3>
-                        <p className="mt-2 text-sm leading-6 text-slate-500">
-                          Uploaded paper mileage sheets will appear here.
-                        </p>
                       </div>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+
+                      <datalist id="property-code-options">
+                        {properties.map((property) => (
+                          <option
+                            key={property.id}
+                            value={property.property_code}
+                          >
+                            {getPropertyDisplayLabel(property)}
+                          </option>
+                        ))}
+                      </datalist>
+
+                      <div className="overflow-auto rounded-3xl border border-slate-200">
+                        <table className="w-full min-w-[1500px] border-collapse text-left text-sm">
+                          <thead className="bg-slate-50 text-slate-600">
+                            <tr>
+                              <TableHeader>Entry #</TableHeader>
+                              <TableHeader>Date</TableHeader>
+                              <TableHeader>Vehicle</TableHeader>
+                              <TableHeader>Property Text</TableHeader>
+                              <TableHeader>Property Code</TableHeader>
+                              <TableHeader>Start Odo</TableHeader>
+                              <TableHeader>Ending Odo</TableHeader>
+                              <TableHeader>Miles</TableHeader>
+                              <TableHeader>Purpose</TableHeader>
+                              <TableHeader>Review</TableHeader>
+                              <TableHeader>Action</TableHeader>
+                            </tr>
+                          </thead>
+
+                          <tbody className="divide-y divide-slate-100">
+                            {uploadDraftRows.map((row) => (
+                              <tr key={row.id} className="bg-white">
+                                <td className="px-3 py-3">
+                                  <input
+                                    type="number"
+                                    value={row.entry_number || ""}
+                                    disabled={isSubmitted}
+                                    onChange={(event) =>
+                                      onUpdateDraftEntry(row.id, "entry_number", event.target.value)
+                                    }
+                                    className="w-20 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                  />
+                                </td>
+
+                                <td className="px-3 py-3">
+                                  <input
+                                    type="date"
+                                    value={toInputDateValue(row.entry_date)}
+                                    disabled={isSubmitted}
+                                    onChange={(event) =>
+                                      onUpdateDraftEntry(row.id, "entry_date", event.target.value)
+                                    }
+                                    className="w-40 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                  />
+                                </td>
+
+                                <td className="px-3 py-3">
+                                  <input
+                                    type="text"
+                                    value={row.vehicle || ""}
+                                    disabled={isSubmitted}
+                                    onChange={(event) =>
+                                      onUpdateDraftEntry(row.id, "vehicle", event.target.value)
+                                    }
+                                    className="w-44 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                  />
+                                </td>
+
+                                <td className="px-3 py-3">
+                                  <input
+                                    type="text"
+                                    value={row.property_text || ""}
+                                    disabled={isSubmitted}
+                                    onChange={(event) =>
+                                      onUpdateDraftEntry(row.id, "property_text", event.target.value)
+                                    }
+                                    className="w-64 rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                  />
+                                </td>
+
+                                <td className="px-3 py-3">
+                                  <input
+                                    type="text"
+                                    list="property-code-options"
+                                    value={row.property_code || ""}
+                                    disabled={isSubmitted}
+                                    onChange={(event) =>
+                                      onUpdateDraftEntry(row.id, "property_code", event.target.value)
+                                    }
+                                    placeholder="Select code"
+                                    className="w-44 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                  />
+                                </td>
+
+                                <td className="px-3 py-3">
+                                  <input
+                                    type="number"
+                                    value={row.start_odometer ?? ""}
+                                    disabled={isSubmitted}
+                                    onChange={(event) =>
+                                      onUpdateDraftEntry(row.id, "start_odometer", event.target.value)
+                                    }
+                                    className="w-32 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                  />
+                                </td>
+
+                                <td className="px-3 py-3">
+                                  <input
+                                    type="number"
+                                    value={row.end_odometer ?? ""}
+                                    disabled={isSubmitted}
+                                    onChange={(event) =>
+                                      onUpdateDraftEntry(row.id, "end_odometer", event.target.value)
+                                    }
+                                    className="w-32 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                  />
+                                </td>
+
+                                <td className="px-3 py-3">
+                                  <input
+                                    type="number"
+                                    value={row.miles ?? ""}
+                                    disabled={isSubmitted}
+                                    onChange={(event) =>
+                                      onUpdateDraftEntry(row.id, "miles", event.target.value)
+                                    }
+                                    className="w-24 rounded-xl border border-slate-200 px-3 py-2 font-black outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                  />
+                                </td>
+
+                                <td className="px-3 py-3">
+                                  <textarea
+                                    rows="2"
+                                    value={row.purpose || ""}
+                                    disabled={isSubmitted}
+                                    onChange={(event) =>
+                                      onUpdateDraftEntry(row.id, "purpose", event.target.value)
+                                    }
+                                    className="w-72 resize-none rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                  />
+                                </td>
+
+                                <td className="px-3 py-3">
+                                  <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
+                                    {row.needs_review ? "Review" : "OK"}
+                                  </span>
+                                </td>
+
+                                <td className="px-3 py-3">
+                                  <button
+                                    type="button"
+                                    disabled={isSubmitted}
+                                    onClick={() => onDeleteDraftRow(row)}
+                                    className="rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    Delete
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-5 text-center">
+                      <p className="font-black text-slate-950">
+                        No AI draft rows yet.
+                      </p>
+                      <p className="mt-2 text-sm text-slate-500">
+                        Click Convert With AI to extract editable mileage rows
+                        from the uploaded paper sheet.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <div className="rounded-3xl border border-slate-200 px-6 py-12 text-center">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                <FileUp size={28} />
+              </div>
+              <h3 className="mt-4 text-lg font-black text-slate-950">
+                No Uploads Yet
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                Uploaded paper mileage sheets will appear here.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </section>
+  );
+}
+
+function ReportMiniCard({ label, value }) {
+  return (
+    <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200">
+      <p className="text-xs font-black uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-1 text-lg font-black text-slate-950">{value}</p>
+    </div>
+  );
+}
+
+function AiStatusBadge({ status }) {
+  const cleanStatus = String(status || "not_started").toLowerCase();
+
+  const statusClasses = {
+    not_started: "bg-slate-100 text-slate-600",
+    processing: "bg-amber-50 text-amber-700",
+    converted: "bg-blue-50 text-blue-700",
+    needs_review: "bg-violet-50 text-violet-700",
+    submitted: "bg-emerald-50 text-emerald-700",
+    failed: "bg-red-50 text-red-700",
+  };
+
+  return (
+    <span
+      className={
+        "inline-flex rounded-full px-3 py-1 text-xs font-black capitalize " +
+        (statusClasses[cleanStatus] || statusClasses.not_started)
+      }
+    >
+      AI: {cleanStatus.replaceAll("_", " ")}
+    </span>
   );
 }
 
@@ -2297,7 +2922,7 @@ function MileageTable({
           {entries.map((entry) => (
             <tr key={entry.id} className="bg-white">
               <td className="px-4 py-4 font-semibold text-slate-700">
-                {formatDate(entry.entry_date)}
+                {formatDate(getEntryDate(entry))}
               </td>
 
               <td className="px-4 py-4 text-slate-600">
@@ -2315,12 +2940,12 @@ function MileageTable({
               </td>
 
               <td className="px-4 py-4 font-black text-slate-950">
-                {formatMiles(calculateEntryMiles(entry))}
+                {formatMiles(getEntryMiles(entry))}
               </td>
 
               <td className="px-4 py-4">
                 <span className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-black capitalize text-emerald-700">
-                  {entry.status || "saved"}
+                  {getEntryStatus(entry)}
                 </span>
               </td>
 
@@ -2504,6 +3129,45 @@ function ChatBubble({ side, name, text, createdAt }) {
       </div>
     </div>
   );
+}
+
+
+async function getWorkerPaperSheetDraftEntries(workerId) {
+  if (!workerId) return [];
+
+  const { data, error } = await supabase
+    .from("paper_sheet_draft_entries")
+    .select("*")
+    .eq("worker_id", workerId)
+    .order("entry_number", { ascending: true });
+
+  if (error) throw error;
+
+  return data || [];
+}
+
+function buildDraftEntryPayload(row) {
+  return {
+    entry_number: row.entry_number === "" ? null : Number(row.entry_number),
+    entry_date: row.entry_date || null,
+    vehicle: row.vehicle || "",
+    property_text: row.property_text || "",
+    property_code: row.property_code || "",
+    start_odometer:
+      row.start_odometer === "" || row.start_odometer === null
+        ? null
+        : Number(row.start_odometer),
+    end_odometer:
+      row.end_odometer === "" || row.end_odometer === null
+        ? null
+        : Number(row.end_odometer),
+    miles:
+      row.miles === "" || row.miles === null
+        ? null
+        : Number(row.miles),
+    purpose: row.purpose || "",
+    needs_review: true,
+  };
 }
 
 
@@ -2705,14 +3369,14 @@ function getLatestEndOdometerForVehicle(entries, vehicleName) {
 
   const latestMatchingEntry = (entries || []).find((entry) => {
     return (
-      vehicleLabelsMatch(entry.vehicle, vehicleName) &&
-      entry.end_odometer !== null &&
-      entry.end_odometer !== undefined &&
-      entry.end_odometer !== ""
+      vehicleLabelsMatch(getEntryVehicle(entry), vehicleName) &&
+      getEntryEndOdometer(entry) !== null &&
+      getEntryEndOdometer(entry) !== undefined &&
+      getEntryEndOdometer(entry) !== ""
     );
   });
 
-  return latestMatchingEntry?.end_odometer || "";
+  return latestMatchingEntry ? getEntryEndOdometer(latestMatchingEntry) : "";
 }
 
 function getPropertyDisplayLabel(property) {
@@ -2744,6 +3408,208 @@ function getPropertyDisplayLabel(property) {
   return property.property_code || "";
 }
 
+function buildWorkerMileageEntryUpdatePayload({
+  entry,
+  form,
+  property,
+}) {
+  const row = entry || {};
+  const payload = {};
+
+  setExistingEntryColumns({
+    payload,
+    row,
+    candidates: ["entry_date", "date", "trip_date"],
+    value: form.entryDate,
+  });
+
+  setExistingEntryColumns({
+    payload,
+    row,
+    candidates: ["vehicle", "vehicle_name", "vehicle_display"],
+    value: form.vehicleName,
+  });
+
+  setExistingEntryColumns({
+    payload,
+    row,
+    candidates: ["property_code", "property"],
+    value: property?.property_code || form.propertyCode,
+  });
+
+  setExistingEntryColumns({
+    payload,
+    row,
+    candidates: ["property_display", "property_name"],
+    value: getPropertyDisplayLabel(property) || form.propertyCode,
+  });
+
+  setExistingEntryColumns({
+    payload,
+    row,
+    candidates: ["start_odometer", "starting_odometer", "start_odo"],
+    value: toNumberOrNull(form.startOdometer),
+  });
+
+  setExistingEntryColumns({
+    payload,
+    row,
+    candidates: ["end_odometer", "ending_odometer", "end_odo"],
+    value: toNumberOrNull(form.endOdometer),
+  });
+
+  setExistingEntryColumns({
+    payload,
+    row,
+    candidates: ["miles", "total_miles", "mileage"],
+    value: calculateMilesFromOdometer(form.startOdometer, form.endOdometer),
+  });
+
+  setExistingEntryColumns({
+    payload,
+    row,
+    candidates: ["purpose", "notes"],
+    value: form.purpose || "",
+  });
+
+  if (Object.keys(payload).length === 0) {
+    payload.entry_date = form.entryDate;
+    payload.vehicle = form.vehicleName;
+    payload.property_code = property?.property_code || form.propertyCode;
+    payload.property_display = getPropertyDisplayLabel(property) || form.propertyCode;
+    payload.start_odometer = toNumberOrNull(form.startOdometer);
+    payload.end_odometer = toNumberOrNull(form.endOdometer);
+    payload.miles = calculateMilesFromOdometer(
+      form.startOdometer,
+      form.endOdometer
+    );
+    payload.purpose = form.purpose || "";
+  }
+
+  return payload;
+}
+
+async function updateMileageEntryRow(entryId, payload) {
+  const { data, error } = await supabase
+    .from("mileage_entries")
+    .update(payload)
+    .eq("id", entryId)
+    .select("*")
+    .maybeSingle();
+
+  if (!error) {
+    return data;
+  }
+
+  const cleanPayload = { ...payload };
+  delete cleanPayload.miles;
+  delete cleanPayload.total_miles;
+  delete cleanPayload.mileage;
+
+  const canRetryWithoutMiles =
+    Object.keys(cleanPayload).length !== Object.keys(payload).length;
+
+  if (canRetryWithoutMiles) {
+    const retryResult = await supabase
+      .from("mileage_entries")
+      .update(cleanPayload)
+      .eq("id", entryId)
+      .select("*")
+      .maybeSingle();
+
+    if (!retryResult.error) {
+      return retryResult.data;
+    }
+  }
+
+  throw error;
+}
+
+function setExistingEntryColumns({ payload, row, candidates, value }) {
+  candidates.forEach((columnName) => {
+    if (hasOwnColumn(row, columnName)) {
+      payload[columnName] = value;
+    }
+  });
+}
+
+function hasOwnColumn(row, columnName) {
+  return Object.prototype.hasOwnProperty.call(row || {}, columnName);
+}
+
+function toNumberOrNull(value) {
+  if (value === "" || value === null || value === undefined) {
+    return null;
+  }
+
+  const numberValue = Number(value);
+
+  return Number.isNaN(numberValue) ? null : numberValue;
+}
+
+function stringifyValue(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  return String(value);
+}
+
+function getEntryDate(entry) {
+  return entry?.entry_date || entry?.date || entry?.trip_date || entry?.created_at || "";
+}
+
+function getEntryVehicle(entry) {
+  return entry?.vehicle || entry?.vehicle_name || entry?.vehicle_display || "";
+}
+
+function getEntryPropertyCode(entry) {
+  return entry?.property_code || entry?.property || "";
+}
+
+function getEntryPropertyDisplay(entry) {
+  return (
+    entry?.property_display ||
+    entry?.property_name ||
+    entry?.property_code ||
+    entry?.property ||
+    ""
+  );
+}
+
+function getEntryStartOdometer(entry) {
+  return entry?.start_odometer ?? entry?.starting_odometer ?? entry?.start_odo ?? "";
+}
+
+function getEntryEndOdometer(entry) {
+  return entry?.end_odometer ?? entry?.ending_odometer ?? entry?.end_odo ?? "";
+}
+
+function getEntryPurpose(entry) {
+  return entry?.purpose || entry?.notes || "";
+}
+
+function getEntryStatus(entry) {
+  return entry?.status || "saved";
+}
+
+function getEntryMiles(entry) {
+  const start = Number(getEntryStartOdometer(entry));
+  const end = Number(getEntryEndOdometer(entry));
+
+  if (!Number.isNaN(start) && !Number.isNaN(end) && end >= start) {
+    return end - start;
+  }
+
+  const miles = Number(entry?.miles || entry?.total_miles || entry?.mileage);
+
+  if (!Number.isNaN(miles)) {
+    return miles;
+  }
+
+  return 0;
+}
+
 function downloadMileageHistoryCsv(entries, selectedMonth, profile) {
   if (!entries || entries.length === 0) {
     return;
@@ -2762,15 +3628,15 @@ function downloadMileageHistoryCsv(entries, selectedMonth, profile) {
   ];
 
   const rows = entries.map((entry) => [
-    formatDate(entry.entry_date),
-    formatVehicleNameForDisplay(entry.vehicle || "", profile),
-    entry.property_code || "",
-    entry.property_display || "",
-    entry.purpose || "",
-    entry.start_odometer || "",
-    entry.end_odometer || "",
-    calculateEntryMiles(entry),
-    entry.status || "saved",
+    formatDate(getEntryDate(entry)),
+    formatVehicleNameForDisplay(getEntryVehicle(entry), profile),
+    getEntryPropertyCode(entry),
+    getEntryPropertyDisplay(entry),
+    getEntryPurpose(entry),
+    getEntryStartOdometer(entry),
+    getEntryEndOdometer(entry),
+    getEntryMiles(entry),
+    getEntryStatus(entry),
   ]);
 
   const csvContent = [headers, ...rows]

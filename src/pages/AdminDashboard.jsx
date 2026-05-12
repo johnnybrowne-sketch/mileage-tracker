@@ -143,6 +143,10 @@ export default function AdminDashboard() {
   const [paperUploadError, setPaperUploadError] = useState("");
   const [paperUploadSuccess, setPaperUploadSuccess] = useState("");
 
+  const [paperDraftEntries, setPaperDraftEntries] = useState([]);
+  const [selectedPaperUploadId, setSelectedPaperUploadId] = useState("");
+  const [convertingPaperUploadId, setConvertingPaperUploadId] = useState("");
+
   const workerMap = useMemo(() => {
     const map = new Map();
 
@@ -441,6 +445,11 @@ export default function AdminDashboard() {
         { event: "*", schema: "public", table: "paper_sheet_uploads" },
         scheduleRealtimeRefresh
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "paper_sheet_draft_entries" },
+        scheduleRealtimeRefresh
+      )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR") {
           console.warn(
@@ -574,6 +583,7 @@ export default function AdminDashboard() {
       assignmentsResult,
       messagesResult,
       paperUploadsResult,
+      paperDraftEntriesResult,
     ] = await Promise.all([
       supabase
         .from("worker_profiles")
@@ -611,6 +621,11 @@ export default function AdminDashboard() {
         .from("paper_sheet_uploads")
         .select("*")
         .order("created_at", { ascending: false }),
+
+      supabase
+        .from("paper_sheet_draft_entries")
+        .select("*")
+        .order("entry_number", { ascending: true }),
     ]);
 
     if (workersResult.error) throw workersResult.error;
@@ -621,6 +636,7 @@ export default function AdminDashboard() {
     if (assignmentsResult.error) throw assignmentsResult.error;
     if (messagesResult.error) throw messagesResult.error;
     if (paperUploadsResult.error) throw paperUploadsResult.error;
+    if (paperDraftEntriesResult.error) throw paperDraftEntriesResult.error;
 
     const workerRows = workersResult.data || [];
     const entryRows = entriesResult.data || [];
@@ -634,6 +650,7 @@ export default function AdminDashboard() {
     setAssignments(assignmentsResult.data || []);
     setMessages(messagesResult.data || []);
     setPaperUploads(paperUploadsResult.data || []);
+    setPaperDraftEntries(paperDraftEntriesResult.data || []);
     setDataError("");
 
     if (shouldSetMonth) {
@@ -653,6 +670,7 @@ export default function AdminDashboard() {
       assignmentRows: assignmentsResult.data || [],
       messageRows: messagesResult.data || [],
       paperUploadRows: paperUploadsResult.data || [],
+      paperDraftEntryRows: paperDraftEntriesResult.data || [],
     };
   }
 
@@ -945,9 +963,19 @@ export default function AdminDashboard() {
         sheetId,
       });
 
+      const completePayload = buildCompleteMileageEntryUpdatePayload({
+        basePayload: payload,
+        entry: editingEntry,
+        workers,
+        worker: selectedWorkerForEdit,
+        form: editForm,
+        property: selectedProperty,
+        sheetId,
+      });
+
       const { error } = await supabase
         .from("mileage_entries")
-        .update(payload)
+        .update(completePayload)
         .eq("id", editingEntry.id);
 
       if (error) throw error;
@@ -1049,6 +1077,59 @@ export default function AdminDashboard() {
 
     setPaperUploads(data || []);
     return data || [];
+  }
+
+  async function refreshPaperDraftEntries() {
+    const { data, error } = await supabase
+      .from("paper_sheet_draft_entries")
+      .select("*")
+      .order("entry_number", { ascending: true });
+
+    if (error) throw error;
+
+    setPaperDraftEntries(data || []);
+    return data || [];
+  }
+
+  async function handleConvertPaperUploadAsAdmin(upload) {
+    if (!upload?.id) {
+      setPaperUploadError("Upload is missing.");
+      return;
+    }
+
+    setConvertingPaperUploadId(upload.id);
+    setPaperUploadError("");
+    setPaperUploadSuccess("");
+
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "convert-paper-sheet",
+        {
+          body: {
+            uploadId: upload.id,
+          },
+        }
+      );
+
+      if (error) throw error;
+
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
+      await Promise.all([refreshPaperUploads(), refreshPaperDraftEntries()]);
+
+      setSelectedPaperUploadId(upload.id);
+      setPaperUploadSuccess("AI conversion finished. Draft rows are ready for review.");
+    } catch (error) {
+      console.error(error);
+      setPaperUploadError(
+        error?.message ||
+          "AI conversion failed. Please check the Edge Function logs."
+      );
+    } finally {
+      setConvertingPaperUploadId("");
+    }
   }
 
   async function handleOpenPaperUpload(upload) {
@@ -1327,9 +1408,14 @@ export default function AdminDashboard() {
                 updatingUploadId={updatingUploadId}
                 error={paperUploadError}
                 success={paperUploadSuccess}
+                draftEntries={paperDraftEntries}
+                selectedUploadId={selectedPaperUploadId}
+                setSelectedUploadId={setSelectedPaperUploadId}
+                convertingUploadId={convertingPaperUploadId}
                 onOpenUpload={handleOpenPaperUpload}
                 onUpdateUpload={handleUpdatePaperUpload}
                 onDeleteUpload={handleDeletePaperUpload}
+                onConvertUpload={handleConvertPaperUploadAsAdmin}
               />
             )}
 
@@ -2523,9 +2609,14 @@ function PaperSheetsReviewView({
   updatingUploadId,
   error,
   success,
+  draftEntries,
+  selectedUploadId,
+  setSelectedUploadId,
+  convertingUploadId,
   onOpenUpload,
   onUpdateUpload,
   onDeleteUpload,
+  onConvertUpload,
 }) {
   const totalUploaded = allUploads.length;
   const reviewingCount = allUploads.filter((upload) => {
@@ -2535,242 +2626,443 @@ function PaperSheetsReviewView({
     return upload.status === "converted";
   }).length;
 
+  const selectedUpload =
+    uploads.find((upload) => String(upload.id) === String(selectedUploadId)) ||
+    allUploads.find((upload) => String(upload.id) === String(selectedUploadId)) ||
+    null;
+
+  const selectedDraftRows = selectedUpload
+    ? draftEntries
+        .filter((row) => String(row.upload_id) === String(selectedUpload.id))
+        .sort((first, second) => {
+          return Number(first.entry_number || 0) - Number(second.entry_number || 0);
+        })
+    : [];
+
+  const selectedDraftTotal = selectedDraftRows.reduce((total, row) => {
+    return total + Number(row.miles || 0);
+  }, 0);
+
   return (
-    <section className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200 xl:p-8">
-      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
-        <SectionTitle
-          eyebrow="Paper Sheets"
-          title="Uploaded Mileage Sheets"
-          text="Review worker-uploaded paper mileage sheets, open files, update status, and add admin notes. This section updates live through Supabase Realtime."
-        />
+    <section className="space-y-6">
+      <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200 xl:p-8">
+        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
+          <SectionTitle
+            eyebrow="Paper Sheets"
+            title="Uploaded Mileage Sheets"
+            text="Review worker-uploaded paper mileage sheets, run AI conversion, open files, update status, and view extracted draft rows."
+          />
 
-        <div className="inline-flex h-12 items-center gap-2 rounded-2xl bg-blue-50 px-4 text-sm font-black text-blue-700">
-          <FileUp size={18} />
-          {totalUploaded} Uploads
+          <div className="inline-flex h-12 items-center gap-2 rounded-2xl bg-blue-50 px-4 text-sm font-black text-blue-700">
+            <FileUp size={18} />
+            {totalUploaded} Uploads
+          </div>
         </div>
-      </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-3">
-        <KpiCard
-          icon={<FileUp size={24} />}
-          label="Total Uploads"
-          value={totalUploaded}
-          helper="All paper sheets"
-        />
+        <div className="mt-6 grid gap-4 md:grid-cols-3">
+          <KpiCard
+            icon={<FileUp size={24} />}
+            label="Total Uploads"
+            value={totalUploaded}
+            helper="All paper sheets"
+          />
 
-        <KpiCard
-          icon={<ClipboardList size={24} />}
-          label="Reviewing"
-          value={reviewingCount}
-          helper="Needs admin review"
-        />
+          <KpiCard
+            icon={<ClipboardList size={24} />}
+            label="Reviewing"
+            value={reviewingCount}
+            helper="Needs admin review"
+          />
 
-        <KpiCard
-          icon={<BadgeCheck size={24} />}
-          label="Converted"
-          value={convertedCount}
-          helper="Finished sheets"
-        />
-      </div>
-
-      <div className="mt-6 grid gap-3 xl:grid-cols-[1fr_1fr_1.4fr]">
-        <select
-          value={workerFilter}
-          onChange={(event) => setWorkerFilter(event.target.value)}
-          className={filterClass}
-        >
-          <option value="all">All Workers</option>
-          {workers.map((worker) => (
-            <option key={worker.id} value={worker.id}>
-              {worker.full_name || worker.email || "Unnamed Worker"}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={statusFilter}
-          onChange={(event) => setStatusFilter(event.target.value)}
-          className={filterClass}
-        >
-          {paperUploadStatusOptions.map((status) => (
-            <option key={status.value} value={status.value}>
-              {status.label}
-            </option>
-          ))}
-        </select>
-
-        <div className="flex h-12 items-center rounded-2xl border border-slate-200 bg-white px-4 shadow-sm transition focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100">
-          <Search size={18} className="text-slate-400" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            placeholder="Search worker, file, month, notes..."
-            className="w-full border-0 bg-transparent px-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400"
+          <KpiCard
+            icon={<BadgeCheck size={24} />}
+            label="Converted"
+            value={convertedCount}
+            helper="Finished sheets"
           />
         </div>
-      </div>
 
-      {error && <div className="mt-5"><AlertBox type="error" message={error} /></div>}
-      {success && <div className="mt-5"><AlertBox type="success" message={success} /></div>}
+        <div className="mt-6 grid gap-3 xl:grid-cols-[1fr_1fr_1.4fr]">
+          <select
+            value={workerFilter}
+            onChange={(event) => setWorkerFilter(event.target.value)}
+            className={filterClass}
+          >
+            <option value="all">All Workers</option>
+            {workers.map((worker) => (
+              <option key={worker.id} value={worker.id}>
+                {worker.full_name || worker.email || "Unnamed Worker"}
+              </option>
+            ))}
+          </select>
 
-      <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200">
-        <div className="max-h-[720px] overflow-auto">
-          <table className="w-full min-w-[1500px] border-collapse text-left text-sm">
-            <thead className="bg-slate-50 text-slate-600">
-              <tr>
-                <TableHeader>Uploaded</TableHeader>
-                <TableHeader>Worker</TableHeader>
-                <TableHeader>File</TableHeader>
-                <TableHeader>Month</TableHeader>
-                <TableHeader>Worker Notes</TableHeader>
-                <TableHeader>Status</TableHeader>
-                <TableHeader>Admin Notes</TableHeader>
-                <TableHeader>Actions</TableHeader>
-              </tr>
-            </thead>
+          <select
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+            className={filterClass}
+          >
+            {paperUploadStatusOptions.map((status) => (
+              <option key={status.value} value={status.value}>
+                {status.label}
+              </option>
+            ))}
+          </select>
 
-            <tbody className="divide-y divide-slate-100">
-              {uploads.length > 0 ? (
-                uploads.map((upload) => {
-                  const worker = getWorkerForUpload(upload, workerMap);
-                  const currentAdminNotes =
-                    adminNotes[upload.id] ?? upload.admin_notes ?? "";
+          <div className="flex h-12 items-center rounded-2xl border border-slate-200 bg-white px-4 shadow-sm transition focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100">
+            <Search size={18} className="text-slate-400" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Search worker, file, month, notes..."
+              className="w-full border-0 bg-transparent px-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400"
+            />
+          </div>
+        </div>
 
-                  return (
-                    <tr key={upload.id} className="bg-white">
-                      <td className="px-4 py-4">
-                        <p className="font-black text-slate-950">
-                          {formatDate(upload.created_at)}
-                        </p>
-                        <p className="mt-1 text-xs font-semibold text-slate-500">
-                          {formatMessageTime(upload.created_at)}
-                        </p>
-                      </td>
+        {error && <div className="mt-5"><AlertBox type="error" message={error} /></div>}
+        {success && <div className="mt-5"><AlertBox type="success" message={success} /></div>}
 
-                      <td className="px-4 py-4">
-                        <p className="font-black text-slate-950">
-                          {worker?.full_name || "Unknown Worker"}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {worker?.email || "No email"}
-                        </p>
-                      </td>
+        <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200">
+          <div className="max-h-[720px] overflow-auto">
+            <table className="w-full min-w-[1650px] border-collapse text-left text-sm">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <TableHeader>Uploaded</TableHeader>
+                  <TableHeader>Worker</TableHeader>
+                  <TableHeader>File</TableHeader>
+                  <TableHeader>Month</TableHeader>
+                  <TableHeader>AI Status</TableHeader>
+                  <TableHeader>Drafts</TableHeader>
+                  <TableHeader>Status</TableHeader>
+                  <TableHeader>Admin Notes</TableHeader>
+                  <TableHeader>Actions</TableHeader>
+                </tr>
+              </thead>
 
-                      <td className="px-4 py-4">
-                        <p className="max-w-[240px] truncate font-black text-slate-950">
-                          {upload.file_name}
-                        </p>
-                        <p className="mt-1 text-xs font-semibold text-slate-500">
-                          {formatFileSize(upload.file_size)} • {upload.file_type || "file"}
-                        </p>
-                      </td>
+              <tbody className="divide-y divide-slate-100">
+                {uploads.length > 0 ? (
+                  uploads.map((upload) => {
+                    const worker = getWorkerForUpload(upload, workerMap);
+                    const currentAdminNotes =
+                      adminNotes[upload.id] ?? upload.admin_notes ?? "";
+                    const rowsForUpload = draftEntries.filter((row) => {
+                      return String(row.upload_id) === String(upload.id);
+                    });
+                    const draftTotal = rowsForUpload.reduce((total, row) => {
+                      return total + Number(row.miles || 0);
+                    }, 0);
+                    const isConverting = convertingUploadId === upload.id;
 
-                      <td className="px-4 py-4 font-semibold text-slate-700">
-                        {formatPaperUploadMonth(upload.month_key)}
-                      </td>
+                    return (
+                      <tr key={upload.id} className="bg-white">
+                        <td className="px-4 py-4">
+                          <p className="font-black text-slate-950">
+                            {formatDate(upload.created_at)}
+                          </p>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">
+                            {formatMessageTime(upload.created_at)}
+                          </p>
+                        </td>
 
-                      <td className="max-w-[260px] px-4 py-4 text-slate-600">
-                        <p className="line-clamp-4 leading-6">
-                          {upload.notes || "—"}
-                        </p>
-                      </td>
+                        <td className="px-4 py-4">
+                          <p className="font-black text-slate-950">
+                            {worker?.full_name || "Unknown Worker"}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {worker?.email || "No email"}
+                          </p>
+                        </td>
 
-                      <td className="px-4 py-4">
-                        <select
-                          value={upload.status || "uploaded"}
-                          disabled={updatingUploadId === upload.id}
-                          onChange={(event) =>
-                            onUpdateUpload(upload.id, {
-                              status: event.target.value,
-                            })
-                          }
-                          className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-black capitalize text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {paperUploadStatusOptions
-                            .filter((status) => status.value !== "all")
-                            .map((status) => (
-                              <option key={status.value} value={status.value}>
-                                {status.label}
-                              </option>
-                            ))}
-                        </select>
+                        <td className="px-4 py-4">
+                          <p className="max-w-[240px] truncate font-black text-slate-950">
+                            {upload.file_name}
+                          </p>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">
+                            {formatFileSize(upload.file_size)} • {upload.file_type || "file"}
+                          </p>
+                        </td>
 
-                        <div className="mt-2">
-                          <PaperUploadStatusBadge status={upload.status} />
-                        </div>
-                      </td>
+                        <td className="px-4 py-4 font-semibold text-slate-700">
+                          {formatPaperUploadMonth(upload.month_key)}
+                        </td>
 
-                      <td className="px-4 py-4">
-                        <textarea
-                          rows="3"
-                          value={currentAdminNotes}
-                          onChange={(event) =>
-                            setAdminNotes((current) => ({
-                              ...current,
-                              [upload.id]: event.target.value,
-                            }))
-                          }
-                          placeholder="Add admin notes..."
-                          className="w-full min-w-[240px] resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                        />
+                        <td className="px-4 py-4">
+                          <AiStatusBadge status={upload.ai_status} />
+                          {upload.ai_error && (
+                            <p className="mt-2 max-w-[220px] text-xs font-semibold leading-5 text-red-600">
+                              {upload.ai_error}
+                            </p>
+                          )}
+                        </td>
 
-                        <button
-                          type="button"
-                          disabled={updatingUploadId === upload.id}
-                          onClick={() =>
-                            onUpdateUpload(upload.id, {
-                              admin_notes: currentAdminNotes,
-                            })
-                          }
-                          className="mt-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          Save Notes
-                        </button>
-                      </td>
+                        <td className="px-4 py-4">
+                          <p className="font-black text-slate-950">
+                            {rowsForUpload.length} rows
+                          </p>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">
+                            Draft total: {formatMiles(draftTotal)}
+                          </p>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">
+                            Detected total: {formatMiles(upload.total_mileage_detected || 0)}
+                          </p>
+                        </td>
 
-                      <td className="px-4 py-4">
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => onOpenUpload(upload)}
-                            className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100"
+                        <td className="px-4 py-4">
+                          <select
+                            value={upload.status || "uploaded"}
+                            disabled={updatingUploadId === upload.id}
+                            onChange={(event) =>
+                              onUpdateUpload(upload.id, {
+                                status: event.target.value,
+                              })
+                            }
+                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-black capitalize text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            <FileUp size={14} />
-                            Open
-                          </button>
+                            {paperUploadStatusOptions
+                              .filter((status) => status.value !== "all")
+                              .map((status) => (
+                                <option key={status.value} value={status.value}>
+                                  {status.label}
+                                </option>
+                              ))}
+                          </select>
+
+                          <div className="mt-2">
+                            <PaperUploadStatusBadge status={upload.status} />
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-4">
+                          <textarea
+                            rows="3"
+                            value={currentAdminNotes}
+                            onChange={(event) =>
+                              setAdminNotes((current) => ({
+                                ...current,
+                                [upload.id]: event.target.value,
+                              }))
+                            }
+                            placeholder="Add admin notes..."
+                            className="w-full min-w-[240px] resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                          />
 
                           <button
                             type="button"
                             disabled={updatingUploadId === upload.id}
-                            onClick={() => onDeleteUpload(upload)}
-                            className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={() =>
+                              onUpdateUpload(upload.id, {
+                                admin_notes: currentAdminNotes,
+                              })
+                            }
+                            className="mt-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            <Trash2 size={14} />
-                            Delete
+                            Save Notes
                           </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              ) : (
-                <tr>
-                  <td colSpan="8" className="px-6 py-12">
-                    <EmptyState
-                      title="No Paper Sheet Uploads Found"
-                      text="Worker uploaded paper mileage sheets will appear here."
-                    />
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                        </td>
+
+                        <td className="px-4 py-4">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => onOpenUpload(upload)}
+                              className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100"
+                            >
+                              <FileUp size={14} />
+                              Open
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={isConverting}
+                              onClick={() => onConvertUpload(upload)}
+                              className="inline-flex items-center gap-2 rounded-xl bg-violet-50 px-3 py-2 text-xs font-black text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isConverting ? "Converting..." : "Convert AI"}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedUploadId(upload.id)}
+                              className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-200"
+                            >
+                              View Rows
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={updatingUploadId === upload.id}
+                              onClick={() => onDeleteUpload(upload)}
+                              className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <Trash2 size={14} />
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan="9" className="px-6 py-12">
+                      <EmptyState
+                        title="No Paper Sheet Uploads Found"
+                        text="Worker uploaded paper mileage sheets will appear here."
+                      />
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
+
+      {selectedUpload && (
+        <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200 xl:p-8">
+          <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
+            <SectionTitle
+              eyebrow="AI Draft Rows"
+              title={selectedUpload.file_name}
+              text="These are the rows extracted by AI. Workers can edit and submit these as final mileage entries from their dashboard."
+            />
+
+            <button
+              type="button"
+              onClick={() => setSelectedUploadId("")}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              Close Rows
+            </button>
+          </div>
+
+          <div className="mt-5 grid gap-4 md:grid-cols-3">
+            <ReportFilterLabel
+              label="Detected Total"
+              value={formatMiles(selectedUpload.total_mileage_detected || 0)}
+            />
+
+            <ReportFilterLabel
+              label="Draft Row Total"
+              value={formatMiles(selectedDraftTotal)}
+            />
+
+            <ReportFilterLabel
+              label="Draft Rows"
+              value={selectedDraftRows.length}
+            />
+          </div>
+
+          <div className="mt-6 overflow-auto rounded-3xl border border-slate-200">
+            <table className="w-full min-w-[1350px] border-collapse text-left text-sm">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <TableHeader>Entry #</TableHeader>
+                  <TableHeader>Date</TableHeader>
+                  <TableHeader>Vehicle</TableHeader>
+                  <TableHeader>Property Text</TableHeader>
+                  <TableHeader>Property Code</TableHeader>
+                  <TableHeader>Start Odo</TableHeader>
+                  <TableHeader>Ending Odo</TableHeader>
+                  <TableHeader>Miles</TableHeader>
+                  <TableHeader>Purpose</TableHeader>
+                  <TableHeader>Review</TableHeader>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y divide-slate-100">
+                {selectedDraftRows.length > 0 ? (
+                  selectedDraftRows.map((row) => (
+                    <tr key={row.id} className="bg-white">
+                      <td className="px-4 py-4 font-black text-slate-950">
+                        {row.entry_number || "—"}
+                      </td>
+                      <td className="px-4 py-4 text-slate-700">
+                        {formatDate(row.entry_date)}
+                      </td>
+                      <td className="px-4 py-4 text-slate-700">
+                        {row.vehicle || "—"}
+                      </td>
+                      <td className="max-w-[240px] px-4 py-4 text-slate-700">
+                        {row.property_text || "—"}
+                      </td>
+                      <td className="px-4 py-4 font-black text-slate-950">
+                        {row.property_code || "—"}
+                      </td>
+                      <td className="px-4 py-4 text-slate-700">
+                        {row.start_odometer || "—"}
+                      </td>
+                      <td className="px-4 py-4 text-slate-700">
+                        {row.end_odometer || "—"}
+                      </td>
+                      <td className="px-4 py-4 font-black text-slate-950">
+                        {formatMiles(row.miles || 0)}
+                      </td>
+                      <td className="max-w-[320px] px-4 py-4 text-slate-700">
+                        {row.purpose || "—"}
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
+                          {row.needs_review ? "Review" : "OK"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="10" className="px-6 py-12">
+                      <EmptyState
+                        title="No Draft Rows Yet"
+                        text="Run AI conversion to extract editable mileage rows."
+                      />
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
+
+function ReportMiniCard({ label, value }) {
+  return (
+    <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200">
+      <p className="text-xs font-black uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-1 text-lg font-black text-slate-950">{value}</p>
+    </div>
+  );
+}
+
+function AiStatusBadge({ status }) {
+  const cleanStatus = String(status || "not_started").toLowerCase();
+
+  const statusClasses = {
+    not_started: "bg-slate-100 text-slate-600",
+    processing: "bg-amber-50 text-amber-700",
+    converted: "bg-blue-50 text-blue-700",
+    needs_review: "bg-violet-50 text-violet-700",
+    submitted: "bg-emerald-50 text-emerald-700",
+    failed: "bg-red-50 text-red-700",
+  };
+
+  return (
+    <span
+      className={
+        "inline-flex rounded-full px-3 py-1 text-xs font-black capitalize " +
+        (statusClasses[cleanStatus] || statusClasses.not_started)
+      }
+    >
+      AI: {cleanStatus.replaceAll("_", " ")}
+    </span>
+  );
+}
+
 
 function MessagesView({
   adminProfile,
@@ -4104,6 +4396,118 @@ function buildMileageSheetPayload({ sheets, worker, entryDate, workers }) {
   }
 
   return payload;
+}
+
+function buildCompleteMileageEntryUpdatePayload({
+  basePayload,
+  entry,
+  workers,
+  worker,
+  form,
+  property,
+  sheetId,
+}) {
+  const row = entry || {};
+  const payload = { ...(basePayload || {}) };
+
+  const workerColumns = [
+    "worker_id",
+    "worker_profile_id",
+    "profile_id",
+    "user_id",
+    "auth_user_id",
+  ];
+
+  workerColumns.forEach((columnName) => {
+    if (hasOwnColumn(row, columnName)) {
+      payload[columnName] = getWorkerColumnValue({
+        worker,
+        workerColumn: columnName,
+        rows: [row],
+        workers,
+      });
+    }
+  });
+
+  setExistingMileageColumns({
+    payload,
+    row,
+    candidates: ["sheet_id"],
+    value: sheetId,
+  });
+
+  setExistingMileageColumns({
+    payload,
+    row,
+    candidates: ["entry_date", "date", "trip_date"],
+    value: form.entryDate,
+  });
+
+  setExistingMileageColumns({
+    payload,
+    row,
+    candidates: ["vehicle", "vehicle_name", "vehicle_display"],
+    value: form.vehicleName,
+  });
+
+  setExistingMileageColumns({
+    payload,
+    row,
+    candidates: ["property_code", "property"],
+    value: property?.property_code || form.propertyCode,
+  });
+
+  setExistingMileageColumns({
+    payload,
+    row,
+    candidates: ["property_display", "property_name"],
+    value: getPropertyDisplayLabel(property) || form.propertyCode,
+  });
+
+  setExistingMileageColumns({
+    payload,
+    row,
+    candidates: ["start_odometer", "starting_odometer", "start_odo"],
+    value: Number(form.startOdometer),
+  });
+
+  setExistingMileageColumns({
+    payload,
+    row,
+    candidates: ["end_odometer", "ending_odometer", "end_odo"],
+    value: Number(form.endOdometer),
+  });
+
+  setExistingMileageColumns({
+    payload,
+    row,
+    candidates: ["miles", "total_miles", "mileage"],
+    value: calculateMilesFromOdometer(form.startOdometer, form.endOdometer),
+  });
+
+  setExistingMileageColumns({
+    payload,
+    row,
+    candidates: ["purpose", "notes"],
+    value: form.purpose || "",
+  });
+
+  setExistingMileageColumns({
+    payload,
+    row,
+    candidates: ["status"],
+    value: form.status || "saved",
+  });
+
+  return payload;
+}
+
+function setExistingMileageColumns({ payload, row, candidates, value }) {
+  candidates.forEach((columnName) => {
+    if (hasOwnColumn(row, columnName)) {
+      payload[columnName] = value;
+    }
+  });
 }
 
 function buildMileagePayloadForSchema({
