@@ -111,6 +111,11 @@ export default function WorkerDashboard() {
   const [editError, setEditError] = useState("");
   const [editSuccess, setEditSuccess] = useState("");
 
+  const [messages, setMessages] = useState([]);
+  const [messageDraft, setMessageDraft] = useState("");
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const [messageError, setMessageError] = useState("");
+
   const calculatedMiles = useMemo(() => {
     return calculateMilesFromOdometer(form.startOdometer, form.endOdometer);
   }, [form.startOdometer, form.endOdometer]);
@@ -160,7 +165,13 @@ export default function WorkerDashboard() {
       window.clearTimeout(refreshTimer);
 
       refreshTimer = window.setTimeout(() => {
-        refreshAllWorkerData(profile.id);
+        refreshAllWorkerData(profile.id).catch((error) => {
+          console.error(error);
+          setDataError(
+            error?.message ||
+              "Realtime refresh failed. Please check Supabase Realtime and RLS policies."
+          );
+        });
       }, 250);
     }
 
@@ -195,6 +206,11 @@ export default function WorkerDashboard() {
         { event: "*", schema: "public", table: "properties" },
         scheduleRealtimeRefresh
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "messages" },
+        scheduleRealtimeRefresh
+      )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR") {
           console.warn(
@@ -208,6 +224,14 @@ export default function WorkerDashboard() {
       supabase.removeChannel(channel);
     };
   }, [profile?.id]);
+
+  useEffect(() => {
+    if (activeView !== "messages" || !profile?.id) return;
+
+    markAdminMessagesRead(profile.id).catch((error) => {
+      console.error(error);
+    });
+  }, [activeView, profile?.id, messages.length]);
 
   async function loadDashboard() {
     setLoading(true);
@@ -278,20 +302,23 @@ export default function WorkerDashboard() {
   }
 
   async function refreshAllWorkerData(workerId) {
-    const [workerEntries, workerVehicles, propertyList] = await Promise.all([
+    const [workerEntries, workerVehicles, propertyList, workerMessages] = await Promise.all([
       getWorkerMileageEntries(workerId),
       getWorkerVehicles(workerId),
       getProperties(),
+      getWorkerMessages(workerId),
     ]);
 
     setEntries(workerEntries);
     setVehicles(workerVehicles);
     setProperties(propertyList);
+    setMessages(workerMessages);
 
     return {
       workerEntries,
       workerVehicles,
       propertyList,
+      workerMessages,
     };
   }
 
@@ -521,6 +548,82 @@ export default function WorkerDashboard() {
     }
   }
 
+  async function refreshMessages(workerId) {
+    const freshMessages = await getWorkerMessages(workerId);
+    setMessages(freshMessages);
+    return freshMessages;
+  }
+
+  async function markAdminMessagesRead(workerId) {
+    if (!workerId) return;
+
+    const hasUnreadAdminMessages = messages.some((message) => {
+      return message.sender_role === "admin" && message.is_read === false;
+    });
+
+    if (!hasUnreadAdminMessages) return;
+
+    const { error } = await supabase
+      .from("messages")
+      .update({ is_read: true })
+      .eq("worker_id", workerId)
+      .eq("sender_role", "admin")
+      .eq("is_read", false);
+
+    if (error) throw error;
+
+    setMessages((currentMessages) =>
+      currentMessages.map((message) => {
+        if (message.sender_role === "admin") {
+          return { ...message, is_read: true };
+        }
+
+        return message;
+      })
+    );
+  }
+
+  async function handleSendWorkerMessage(event) {
+    event.preventDefault();
+
+    if (!profile?.id) {
+      setMessageError("Worker profile is missing.");
+      return;
+    }
+
+    const cleanMessage = messageDraft.trim();
+
+    if (!cleanMessage) {
+      setMessageError("Please type a message before sending.");
+      return;
+    }
+
+    setSendingMessage(true);
+    setMessageError("");
+
+    try {
+      const { error } = await supabase.from("messages").insert({
+        worker_id: profile.id,
+        sender_id: profile.id,
+        sender_role: "driver",
+        body: cleanMessage,
+      });
+
+      if (error) throw error;
+
+      setMessageDraft("");
+      await refreshMessages(profile.id);
+    } catch (error) {
+      console.error(error);
+      setMessageError(
+        error?.message ||
+          "Unable to send message. Please check the messages table RLS policies."
+      );
+    } finally {
+      setSendingMessage(false);
+    }
+  }
+
   async function handleLogout() {
     await signOutUser();
     navigate("/login");
@@ -657,7 +760,17 @@ export default function WorkerDashboard() {
 
             {activeView === "upload" && <UploadSheetView />}
 
-            {activeView === "messages" && <MessagesView profile={profile} />}
+            {activeView === "messages" && (
+              <MessagesView
+                profile={profile}
+                messages={messages}
+                messageDraft={messageDraft}
+                setMessageDraft={setMessageDraft}
+                sendingMessage={sendingMessage}
+                messageError={messageError}
+                onSendMessage={handleSendWorkerMessage}
+              />
+            )}
 
             {activeView === "help" && <HelpView />}
           </div>
@@ -1609,9 +1722,29 @@ function UploadSheetView() {
   );
 }
 
-function MessagesView({ profile }) {
+function MessagesView({
+  profile,
+  messages,
+  messageDraft,
+  setMessageDraft,
+  sendingMessage,
+  messageError,
+  onSendMessage,
+}) {
+  const sortedMessages = useMemo(() => {
+    return [...(messages || [])].sort((first, second) => {
+      return new Date(first.created_at).getTime() - new Date(second.created_at).getTime();
+    });
+  }, [messages]);
+
+  const unreadAdminCount = useMemo(() => {
+    return sortedMessages.filter((message) => {
+      return message.sender_role === "admin" && message.is_read === false;
+    }).length;
+  }, [sortedMessages]);
+
   return (
-    <section className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
+    <section className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
       <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
         <div className="mb-6 inline-flex rounded-2xl bg-blue-50 p-3 text-blue-600">
           <MessageCircle size={28} />
@@ -1620,57 +1753,116 @@ function MessagesView({ profile }) {
         <SectionTitle
           eyebrow="Messages"
           title="Chat With Admin"
-          text="This will become a real-time chat between the worker and admin for mileage questions, missing information, and help requests."
+          text="Send mileage questions, correction requests, and help messages directly to admin. Messages update live when Supabase Realtime is enabled for the messages table."
         />
 
-        <div className="mt-6 rounded-3xl border border-blue-100 bg-blue-50 p-5">
-          <p className="font-black text-blue-900">Next Build Step</p>
-          <p className="mt-2 text-sm leading-6 text-blue-800">
-            We will create a messages table, add RLS policies, then subscribe to
-            new messages in real time.
-          </p>
+        <div className="mt-6 space-y-3">
+          <div className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
+            <p className="font-black text-blue-900">Admin Support</p>
+            <p className="mt-2 text-sm leading-6 text-blue-800">
+              Use this chat for missing mileage details, property questions,
+              correction requests, or paper sheet upload help.
+            </p>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-slate-950">
+                  Conversation Status
+                </p>
+                <p className="mt-1 text-xs font-semibold text-emerald-600">
+                  Real-time messaging enabled
+                </p>
+              </div>
+
+              {unreadAdminCount > 0 && (
+                <span className="rounded-full bg-blue-600 px-3 py-1 text-xs font-black text-white">
+                  {unreadAdminCount} new
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="flex min-h-[560px] flex-col rounded-[2rem] bg-white shadow-sm ring-1 ring-slate-200">
-        <div className="border-b border-slate-200 p-5">
-          <p className="text-sm font-black text-slate-950">Admin Support</p>
-          <p className="mt-1 text-xs font-semibold text-emerald-600">
-            Real-time chat coming next
-          </p>
+      <div className="flex min-h-[640px] flex-col rounded-[2rem] bg-white shadow-sm ring-1 ring-slate-200">
+        <div className="flex items-center justify-between gap-4 border-b border-slate-200 p-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+              <MessageCircle size={22} />
+            </div>
+
+            <div className="min-w-0">
+              <p className="truncate text-sm font-black text-slate-950">
+                Admin Support
+              </p>
+              <p className="truncate text-xs font-semibold text-slate-500">
+                Signed in as {profile?.full_name || "Worker"}
+              </p>
+            </div>
+          </div>
+
+          <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
+            Live Chat
+          </span>
         </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto p-5">
-          <ChatBubble
-            side="left"
-            name="Admin"
-            text="Hi! Send a message here if you need help with your mileage entries."
-          />
+        <div className="flex-1 space-y-4 overflow-y-auto bg-slate-50/70 p-5">
+          {sortedMessages.length > 0 ? (
+            sortedMessages.map((message) => {
+              const isWorkerMessage = message.sender_role === "driver";
 
-          <ChatBubble
-            side="right"
-            name={profile?.full_name || "Worker"}
-            text="Can you review my uploaded mileage sheet?"
-          />
+              return (
+                <ChatBubble
+                  key={message.id}
+                  side={isWorkerMessage ? "right" : "left"}
+                  name={isWorkerMessage ? profile?.full_name || "You" : "Admin"}
+                  text={message.body}
+                  createdAt={message.created_at}
+                />
+              );
+            })
+          ) : (
+            <div className="flex h-full items-center justify-center text-center">
+              <div className="mx-auto max-w-sm">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                  <MessageCircle size={28} />
+                </div>
+                <h3 className="mt-4 text-lg font-black text-slate-950">
+                  No Messages Yet
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  Send your first message to admin if you need help with mileage,
+                  property selection, uploads, or corrections.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
-        <div className="border-t border-slate-200 p-5">
-          <div className="flex gap-3">
+        <form onSubmit={onSendMessage} className="border-t border-slate-200 p-5">
+          {messageError && <AlertBox type="error" message={messageError} />}
+
+          <div className="mt-3 flex gap-3">
             <input
               type="text"
-              placeholder="Type your message..."
-              className="min-w-0 flex-1 rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              value={messageDraft}
+              onChange={(event) => setMessageDraft(event.target.value)}
+              disabled={sendingMessage}
+              placeholder="Type your message to admin..."
+              className="min-w-0 flex-1 rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
             />
 
             <button
-              type="button"
-              className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-200 transition hover:bg-blue-700"
-              onClick={() => alert("Real-time messaging will be connected later.")}
+              type="submit"
+              disabled={sendingMessage || !messageDraft.trim()}
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-200 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Send size={20} />
             </button>
           </div>
-        </div>
+        </form>
       </div>
     </section>
   );
@@ -1947,27 +2139,66 @@ function SmallInfoCard({ title, text }) {
   );
 }
 
-function ChatBubble({ side, name, text }) {
+function ChatBubble({ side, name, text, createdAt }) {
   const isRight = side === "right";
 
   return (
     <div className={`flex ${isRight ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[80%] rounded-3xl px-4 py-3 ${
-          isRight ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-800"
+        className={`max-w-[82%] rounded-3xl px-4 py-3 shadow-sm ${
+          isRight ? "bg-blue-600 text-white" : "bg-white text-slate-800 ring-1 ring-slate-200"
         }`}
       >
-        <p
-          className={`mb-1 text-xs font-black ${
-            isRight ? "text-blue-100" : "text-slate-500"
-          }`}
-        >
-          {name}
-        </p>
-        <p className="text-sm leading-6">{text}</p>
+        <div className="mb-1 flex items-center justify-between gap-3">
+          <p
+            className={`text-xs font-black ${
+              isRight ? "text-blue-100" : "text-slate-500"
+            }`}
+          >
+            {name}
+          </p>
+          <p
+            className={`text-[11px] font-bold ${
+              isRight ? "text-blue-100" : "text-slate-400"
+            }`}
+          >
+            {formatMessageTime(createdAt)}
+          </p>
+        </div>
+        <p className="whitespace-pre-wrap break-words text-sm leading-6">{text}</p>
       </div>
     </div>
   );
+}
+
+
+async function getWorkerMessages(workerId) {
+  if (!workerId) return [];
+
+  const { data, error } = await supabase
+    .from("messages")
+    .select("*")
+    .eq("worker_id", workerId)
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+
+  return data || [];
+}
+
+function formatMessageTime(dateValue) {
+  if (!dateValue) return "";
+
+  const date = new Date(dateValue);
+
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function getPageTitle(activeView) {

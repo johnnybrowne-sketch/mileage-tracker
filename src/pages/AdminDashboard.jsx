@@ -16,6 +16,7 @@ import {
   Route,
   Save,
   Search,
+  Send,
   Settings,
   ShieldCheck,
   Trash2,
@@ -117,6 +118,12 @@ export default function AdminDashboard() {
   const [addError, setAddError] = useState("");
   const [addSuccess, setAddSuccess] = useState("");
 
+  const [messages, setMessages] = useState([]);
+  const [selectedMessageWorkerId, setSelectedMessageWorkerId] = useState("");
+  const [messageDraft, setMessageDraft] = useState("");
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const [messageError, setMessageError] = useState("");
+
   const workerMap = useMemo(() => {
     const map = new Map();
 
@@ -169,6 +176,35 @@ export default function AdminDashboard() {
       assignments,
     }).filter((vehicleName) => vehicleName !== "all");
   }, [addSelectedWorker, workers, vehicles, assignments]);
+
+  const driverWorkers = useMemo(() => {
+    return workers.filter((worker) => isDriverProfile(worker));
+  }, [workers]);
+
+  const selectedMessageWorker = useMemo(() => {
+    if (!selectedMessageWorkerId) return null;
+
+    return (
+      driverWorkers.find(
+        (worker) => String(worker.id) === String(selectedMessageWorkerId)
+      ) || null
+    );
+  }, [driverWorkers, selectedMessageWorkerId]);
+
+  const selectedWorkerMessages = useMemo(() => {
+    if (!selectedMessageWorkerId) return [];
+
+    return messages
+      .filter((message) => {
+        return String(message.worker_id) === String(selectedMessageWorkerId);
+      })
+      .sort((first, second) => {
+        return (
+          new Date(first.created_at).getTime() -
+          new Date(second.created_at).getTime()
+        );
+      });
+  }, [messages, selectedMessageWorkerId]);
 
   const filteredEntries = useMemo(() => {
     return entries.filter((entry) => {
@@ -338,6 +374,11 @@ export default function AdminDashboard() {
         { event: "*", schema: "public", table: "properties" },
         scheduleRealtimeRefresh
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "messages" },
+        scheduleRealtimeRefresh
+      )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR") {
           console.warn(
@@ -379,6 +420,41 @@ export default function AdminDashboard() {
         currentForm.vehicleName || getPersonalVehicleName(addSelectedWorker),
     }));
   }, [addSelectedWorker]);
+
+  useEffect(() => {
+    if (driverWorkers.length === 0) {
+      setSelectedMessageWorkerId("");
+      return;
+    }
+
+    const selectedWorkerStillExists = driverWorkers.some((worker) => {
+      return String(worker.id) === String(selectedMessageWorkerId);
+    });
+
+    if (selectedMessageWorkerId && selectedWorkerStillExists) {
+      return;
+    }
+
+    const workerWithLatestMessage = [...driverWorkers].sort((first, second) => {
+      const firstLatest = getLatestMessageForWorker(messages, first.id);
+      const secondLatest = getLatestMessageForWorker(messages, second.id);
+
+      return (
+        new Date(secondLatest?.created_at || 0).getTime() -
+        new Date(firstLatest?.created_at || 0).getTime()
+      );
+    })[0];
+
+    setSelectedMessageWorkerId(workerWithLatestMessage?.id || driverWorkers[0].id);
+  }, [driverWorkers, messages, selectedMessageWorkerId]);
+
+  useEffect(() => {
+    if (activeView !== "messages" || !selectedMessageWorkerId) return;
+
+    markSelectedWorkerMessagesRead(selectedMessageWorkerId).catch((error) => {
+      console.error(error);
+    });
+  }, [activeView, selectedMessageWorkerId, selectedWorkerMessages.length]);
 
   async function loadAdminDashboard() {
     setLoading(true);
@@ -434,6 +510,7 @@ export default function AdminDashboard() {
       propertiesResult,
       vehiclesResult,
       assignmentsResult,
+      messagesResult,
     ] = await Promise.all([
       supabase
         .from("worker_profiles")
@@ -461,6 +538,11 @@ export default function AdminDashboard() {
         .order("vehicle_name", { ascending: true }),
 
       supabase.from("worker_vehicle_assignments").select("*"),
+
+      supabase
+        .from("messages")
+        .select("*")
+        .order("created_at", { ascending: true }),
     ]);
 
     if (workersResult.error) throw workersResult.error;
@@ -469,6 +551,7 @@ export default function AdminDashboard() {
     if (propertiesResult.error) throw propertiesResult.error;
     if (vehiclesResult.error) throw vehiclesResult.error;
     if (assignmentsResult.error) throw assignmentsResult.error;
+    if (messagesResult.error) throw messagesResult.error;
 
     const workerRows = workersResult.data || [];
     const entryRows = entriesResult.data || [];
@@ -480,6 +563,7 @@ export default function AdminDashboard() {
     setProperties(propertiesResult.data || []);
     setVehicles(vehiclesResult.data || []);
     setAssignments(assignmentsResult.data || []);
+    setMessages(messagesResult.data || []);
     setDataError("");
 
     if (shouldSetMonth) {
@@ -497,6 +581,7 @@ export default function AdminDashboard() {
       propertyRows: propertiesResult.data || [],
       vehicleRows: vehiclesResult.data || [],
       assignmentRows: assignmentsResult.data || [],
+      messageRows: messagesResult.data || [],
     };
   }
 
@@ -522,6 +607,54 @@ export default function AdminDashboard() {
 
     setMileageSheets(data || []);
     return data || [];
+  }
+
+  async function refreshMessages() {
+    const { data, error } = await supabase
+      .from("messages")
+      .select("*")
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+
+    setMessages(data || []);
+    return data || [];
+  }
+
+  async function markSelectedWorkerMessagesRead(workerId) {
+    if (!workerId) return;
+
+    const unreadWorkerMessages = messages.filter((message) => {
+      return (
+        String(message.worker_id) === String(workerId) &&
+        message.sender_role === "driver" &&
+        message.is_read === false
+      );
+    });
+
+    if (unreadWorkerMessages.length === 0) return;
+
+    const { error } = await supabase
+      .from("messages")
+      .update({ is_read: true })
+      .eq("worker_id", workerId)
+      .eq("sender_role", "driver")
+      .eq("is_read", false);
+
+    if (error) throw error;
+
+    setMessages((currentMessages) =>
+      currentMessages.map((message) => {
+        if (
+          String(message.worker_id) === String(workerId) &&
+          message.sender_role === "driver"
+        ) {
+          return { ...message, is_read: true };
+        }
+
+        return message;
+      })
+    );
   }
 
   function handleWorkerFilterChange(workerId) {
@@ -787,6 +920,54 @@ export default function AdminDashboard() {
     }
   }
 
+  async function handleSendAdminMessage(event) {
+    event.preventDefault();
+
+    if (!adminProfile?.id) {
+      setMessageError("Admin profile is missing.");
+      return;
+    }
+
+    if (!selectedMessageWorker?.id) {
+      setMessageError("Please select a worker conversation first.");
+      return;
+    }
+
+    const cleanMessage = messageDraft.trim();
+
+    if (!cleanMessage) {
+      setMessageError("Please type a message before sending.");
+      return;
+    }
+
+    setSendingMessage(true);
+    setMessageError("");
+
+    try {
+      const { error } = await supabase.from("messages").insert({
+        worker_id: selectedMessageWorker.id,
+        sender_id: adminProfile.id,
+        sender_role: "admin",
+        body: cleanMessage,
+      });
+
+      if (error) throw error;
+
+      setMessageDraft("");
+      await refreshMessages();
+    } catch (error) {
+      console.error(error);
+      setMessageError(
+        getFriendlySupabaseError(
+          error,
+          "Unable to send message. Please check the messages table RLS policies."
+        )
+      );
+    } finally {
+      setSendingMessage(false);
+    }
+  }
+
   async function handleLogout() {
     await signOutUser();
     navigate("/login");
@@ -966,7 +1147,22 @@ export default function AdminDashboard() {
               />
             )}
 
-            {activeView === "messages" && <MessagesView />}
+            {activeView === "messages" && (
+              <MessagesView
+                adminProfile={adminProfile}
+                workers={driverWorkers}
+                messages={messages}
+                selectedWorkerId={selectedMessageWorkerId}
+                setSelectedWorkerId={setSelectedMessageWorkerId}
+                selectedWorker={selectedMessageWorker}
+                selectedMessages={selectedWorkerMessages}
+                messageDraft={messageDraft}
+                setMessageDraft={setMessageDraft}
+                sendingMessage={sendingMessage}
+                messageError={messageError}
+                onSendMessage={handleSendAdminMessage}
+              />
+            )}
 
             {activeView === "settings" && <SettingsView />}
           </div>
@@ -2105,26 +2301,265 @@ function ReportsView({
   );
 }
 
-function MessagesView() {
+function MessagesView({
+  adminProfile,
+  workers,
+  messages,
+  selectedWorkerId,
+  setSelectedWorkerId,
+  selectedWorker,
+  selectedMessages,
+  messageDraft,
+  setMessageDraft,
+  sendingMessage,
+  messageError,
+  onSendMessage,
+}) {
+  const [workerSearch, setWorkerSearch] = useState("");
+
+  const conversationWorkers = useMemo(() => {
+    return workers
+      .map((worker) => {
+        const workerMessages = messages.filter((message) => {
+          return String(message.worker_id) === String(worker.id);
+        });
+
+        const latestMessage = workerMessages[workerMessages.length - 1] || null;
+        const unreadCount = workerMessages.filter((message) => {
+          return message.sender_role === "driver" && message.is_read === false;
+        }).length;
+
+        return {
+          worker,
+          latestMessage,
+          unreadCount,
+          totalMessages: workerMessages.length,
+        };
+      })
+      .filter((item) => {
+        const searchText = [
+          item.worker.full_name,
+          item.worker.email,
+          item.latestMessage?.body,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return (
+          !workerSearch.trim() ||
+          searchText.includes(workerSearch.trim().toLowerCase())
+        );
+      })
+      .sort((first, second) => {
+        const firstTime = new Date(first.latestMessage?.created_at || 0).getTime();
+        const secondTime = new Date(second.latestMessage?.created_at || 0).getTime();
+
+        if (second.unreadCount !== first.unreadCount) {
+          return second.unreadCount - first.unreadCount;
+        }
+
+        return secondTime - firstTime;
+      });
+  }, [workers, messages, workerSearch]);
+
   return (
-    <section className="grid gap-6 lg:grid-cols-[0.8fr_1.2fr]">
+    <section className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
       <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
-        <div className="mb-6 inline-flex rounded-2xl bg-blue-50 p-3 text-blue-600">
-          <MessageCircle size={28} />
+        <div className="flex flex-col gap-4 border-b border-slate-100 pb-5">
+          <div>
+            <div className="mb-4 inline-flex rounded-2xl bg-blue-50 p-3 text-blue-600">
+              <MessageCircle size={28} />
+            </div>
+
+            <SectionTitle
+              eyebrow="Messages"
+              title="Worker Conversations"
+              text="Select a worker to view and reply to messages in real time. New worker messages will appear automatically when Supabase Realtime is enabled for the messages table."
+            />
+          </div>
+
+          <div className="flex h-12 items-center rounded-2xl border border-slate-200 bg-white px-4 shadow-sm transition focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100">
+            <Search size={18} className="text-slate-400" />
+            <input
+              type="text"
+              value={workerSearch}
+              onChange={(event) => setWorkerSearch(event.target.value)}
+              placeholder="Search workers or messages..."
+              className="w-full border-0 bg-transparent px-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400"
+            />
+          </div>
         </div>
 
-        <SectionTitle
-          eyebrow="Messages"
-          title="Admin Messaging"
-          text="This will become the admin side of the real-time worker chat."
-        />
+        <div className="mt-5 max-h-[620px] space-y-3 overflow-y-auto pr-1">
+          {conversationWorkers.length > 0 ? (
+            conversationWorkers.map((item) => {
+              const isActive = String(item.worker.id) === String(selectedWorkerId);
+
+              return (
+                <button
+                  key={item.worker.id}
+                  type="button"
+                  onClick={() => setSelectedWorkerId(item.worker.id)}
+                  className={`w-full rounded-3xl p-4 text-left ring-1 transition ${
+                    isActive
+                      ? "bg-blue-600 text-white ring-blue-600 shadow-lg shadow-blue-100"
+                      : "bg-slate-50 text-slate-700 ring-slate-200 hover:bg-white hover:shadow-md"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div
+                        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-black ${
+                          isActive
+                            ? "bg-white/15 text-white"
+                            : "bg-white text-blue-600 shadow-sm ring-1 ring-slate-200"
+                        }`}
+                      >
+                        {getInitials(item.worker.full_name || item.worker.email)}
+                      </div>
+
+                      <div className="min-w-0">
+                        <p className="truncate font-black">
+                          {item.worker.full_name || "Unnamed Worker"}
+                        </p>
+                        <p
+                          className={`truncate text-xs font-semibold ${
+                            isActive ? "text-blue-100" : "text-slate-500"
+                          }`}
+                        >
+                          {item.worker.email || "No email"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {item.unreadCount > 0 && (
+                      <span
+                        className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${
+                          isActive
+                            ? "bg-white text-blue-700"
+                            : "bg-blue-600 text-white"
+                        }`}
+                      >
+                        {item.unreadCount}
+                      </span>
+                    )}
+                  </div>
+
+                  <p
+                    className={`mt-3 line-clamp-2 text-sm leading-6 ${
+                      isActive ? "text-blue-50" : "text-slate-500"
+                    }`}
+                  >
+                    {item.latestMessage?.body || "No messages yet. Start the conversation."}
+                  </p>
+
+                  <div
+                    className={`mt-3 flex items-center justify-between text-xs font-bold ${
+                      isActive ? "text-blue-100" : "text-slate-400"
+                    }`}
+                  >
+                    <span>{item.totalMessages} messages</span>
+                    <span>{formatMessageTime(item.latestMessage?.created_at)}</span>
+                  </div>
+                </button>
+              );
+            })
+          ) : (
+            <EmptyState
+              title="No Workers Found"
+              text="Worker conversations will appear here once worker profiles are available."
+            />
+          )}
+        </div>
       </div>
 
-      <div className="flex min-h-[520px] items-center justify-center rounded-[2rem] bg-white p-8 text-center shadow-sm ring-1 ring-slate-200">
-        <EmptyState
-          title="Messages Coming Next"
-          text="Worker-to-admin conversations will appear here once the real-time chat feature is connected."
-        />
+      <div className="flex min-h-[720px] flex-col rounded-[2rem] bg-white shadow-sm ring-1 ring-slate-200">
+        <div className="flex items-center justify-between gap-4 border-b border-slate-200 p-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-sm font-black text-blue-700">
+              {getInitials(selectedWorker?.full_name || selectedWorker?.email)}
+            </div>
+
+            <div className="min-w-0">
+              <p className="truncate text-sm font-black text-slate-950">
+                {selectedWorker?.full_name || "Select A Worker"}
+              </p>
+              <p className="truncate text-xs font-semibold text-slate-500">
+                {selectedWorker?.email || "Choose a conversation to begin."}
+              </p>
+            </div>
+          </div>
+
+          <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
+            Live Chat
+          </span>
+        </div>
+
+        <div className="flex-1 space-y-4 overflow-y-auto bg-slate-50/70 p-5">
+          {selectedWorker ? (
+            selectedMessages.length > 0 ? (
+              selectedMessages.map((message) => {
+                const isAdminMessage = message.sender_role === "admin";
+
+                return (
+                  <MessageBubble
+                    key={message.id}
+                    side={isAdminMessage ? "right" : "left"}
+                    name={
+                      isAdminMessage
+                        ? adminProfile?.full_name || "Admin"
+                        : selectedWorker.full_name || "Worker"
+                    }
+                    text={message.body}
+                    createdAt={message.created_at}
+                  />
+                );
+              })
+            ) : (
+              <div className="flex h-full items-center justify-center">
+                <EmptyState
+                  title="No Messages Yet"
+                  text="Send the first message to start this worker conversation."
+                />
+              </div>
+            )
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <EmptyState
+                title="Select A Worker"
+                text="Choose a worker from the left to view or send messages."
+              />
+            </div>
+          )}
+        </div>
+
+        <form onSubmit={onSendMessage} className="border-t border-slate-200 p-5">
+          {messageError && <AlertBox type="error" message={messageError} />}
+
+          <div className="mt-3 flex gap-3">
+            <input
+              type="text"
+              value={messageDraft}
+              onChange={(event) => setMessageDraft(event.target.value)}
+              disabled={!selectedWorker || sendingMessage}
+              placeholder={
+                selectedWorker
+                  ? `Message ${selectedWorker.full_name || "worker"}...`
+                  : "Select a worker first..."
+              }
+              className="min-w-0 flex-1 rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+            />
+
+            <button
+              type="submit"
+              disabled={!selectedWorker || sendingMessage || !messageDraft.trim()}
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-200 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Send size={20} />
+            </button>
+          </div>
+        </form>
       </div>
     </section>
   );
@@ -2669,6 +3104,78 @@ function ReportFilterLabel({ label, value }) {
       </p>
     </div>
   );
+}
+
+function MessageBubble({ side, name, text, createdAt }) {
+  const isRight = side === "right";
+
+  return (
+    <div className={`flex ${isRight ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`max-w-[82%] rounded-3xl px-4 py-3 shadow-sm ${
+          isRight ? "bg-blue-600 text-white" : "bg-white text-slate-800 ring-1 ring-slate-200"
+        }`}
+      >
+        <div className="mb-1 flex items-center justify-between gap-3">
+          <p
+            className={`text-xs font-black ${
+              isRight ? "text-blue-100" : "text-slate-500"
+            }`}
+          >
+            {name}
+          </p>
+          <p
+            className={`text-[11px] font-bold ${
+              isRight ? "text-blue-100" : "text-slate-400"
+            }`}
+          >
+            {formatMessageTime(createdAt)}
+          </p>
+        </div>
+
+        <p className="whitespace-pre-wrap break-words text-sm leading-6">{text}</p>
+      </div>
+    </div>
+  );
+}
+
+function getLatestMessageForWorker(messages, workerId) {
+  return [...(messages || [])]
+    .filter((message) => String(message.worker_id) === String(workerId))
+    .sort((first, second) => {
+      return new Date(second.created_at).getTime() - new Date(first.created_at).getTime();
+    })[0];
+}
+
+function getInitials(value) {
+  const words = String(value || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
+}
+
+function isDriverProfile(profile) {
+  return String(profile?.role || "driver").toLowerCase() !== "admin";
+}
+
+function formatMessageTime(dateValue) {
+  if (!dateValue) return "";
+
+  const date = new Date(dateValue);
+
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function getPageTitle(activeView) {
