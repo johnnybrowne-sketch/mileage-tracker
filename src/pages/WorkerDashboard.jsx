@@ -116,6 +116,14 @@ export default function WorkerDashboard() {
   const [sendingMessage, setSendingMessage] = useState(false);
   const [messageError, setMessageError] = useState("");
 
+  const [paperUploads, setPaperUploads] = useState([]);
+  const [uploadMonthKey, setUploadMonthKey] = useState(getCurrentMonthKey());
+  const [uploadNotes, setUploadNotes] = useState("");
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadingSheet, setUploadingSheet] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const [uploadSuccess, setUploadSuccess] = useState("");
+
   const calculatedMiles = useMemo(() => {
     return calculateMilesFromOdometer(form.startOdometer, form.endOdometer);
   }, [form.startOdometer, form.endOdometer]);
@@ -211,6 +219,11 @@ export default function WorkerDashboard() {
         { event: "*", schema: "public", table: "messages" },
         scheduleRealtimeRefresh
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "paper_sheet_uploads" },
+        scheduleRealtimeRefresh
+      )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR") {
           console.warn(
@@ -302,23 +315,32 @@ export default function WorkerDashboard() {
   }
 
   async function refreshAllWorkerData(workerId) {
-    const [workerEntries, workerVehicles, propertyList, workerMessages] = await Promise.all([
+    const [
+      workerEntries,
+      workerVehicles,
+      propertyList,
+      workerMessages,
+      workerPaperUploads,
+    ] = await Promise.all([
       getWorkerMileageEntries(workerId),
       getWorkerVehicles(workerId),
       getProperties(),
       getWorkerMessages(workerId),
+      getWorkerPaperSheetUploads(workerId),
     ]);
 
     setEntries(workerEntries);
     setVehicles(workerVehicles);
     setProperties(propertyList);
     setMessages(workerMessages);
+    setPaperUploads(workerPaperUploads);
 
     return {
       workerEntries,
       workerVehicles,
       propertyList,
       workerMessages,
+      workerPaperUploads,
     };
   }
 
@@ -624,6 +646,160 @@ export default function WorkerDashboard() {
     }
   }
 
+  async function refreshPaperUploads(workerId) {
+    const freshUploads = await getWorkerPaperSheetUploads(workerId);
+    setPaperUploads(freshUploads);
+    return freshUploads;
+  }
+
+  function handlePaperSheetFileChange(event) {
+    const file = event.target.files?.[0] || null;
+
+    setUploadFile(file);
+    setUploadError("");
+    setUploadSuccess("");
+  }
+
+  async function handleUploadPaperSheet(event) {
+    event.preventDefault();
+
+    if (!profile?.id) {
+      setUploadError("Worker profile is missing.");
+      return;
+    }
+
+    if (!uploadFile) {
+      setUploadError("Please choose an image or PDF file to upload.");
+      return;
+    }
+
+    if (!isAllowedPaperSheetFile(uploadFile)) {
+      setUploadError("Please upload a JPG, PNG, WEBP, or PDF file.");
+      return;
+    }
+
+    if (uploadFile.size > 10 * 1024 * 1024) {
+      setUploadError("File is too large. Maximum upload size is 10 MB.");
+      return;
+    }
+
+    setUploadingSheet(true);
+    setUploadError("");
+    setUploadSuccess("");
+
+    try {
+      const filePath =
+        profile.id + "/" + Date.now() + "-" + sanitizeFileName(uploadFile.name);
+
+      const { error: uploadStorageError } = await supabase.storage
+        .from("paper-sheets")
+        .upload(filePath, uploadFile, {
+          cacheControl: "3600",
+          upsert: false,
+          contentType: uploadFile.type || undefined,
+        });
+
+      if (uploadStorageError) throw uploadStorageError;
+
+      const { error: insertError } = await supabase
+        .from("paper_sheet_uploads")
+        .insert({
+          worker_id: profile.id,
+          file_name: uploadFile.name,
+          file_path: filePath,
+          file_type: uploadFile.type || "",
+          file_size: uploadFile.size || 0,
+          month_key: uploadMonthKey,
+          notes: uploadNotes.trim(),
+          status: "uploaded",
+        });
+
+      if (insertError) throw insertError;
+
+      await refreshPaperUploads(profile.id);
+
+      setUploadFile(null);
+      setUploadNotes("");
+      setUploadMonthKey(getCurrentMonthKey());
+      setUploadSuccess(
+        "Paper mileage sheet uploaded successfully. Admin can now review it."
+      );
+
+      const fileInput = document.getElementById("paper-sheet-file-input");
+
+      if (fileInput) {
+        fileInput.value = "";
+      }
+    } catch (error) {
+      console.error(error);
+      setUploadError(
+        error?.message ||
+          "Unable to upload paper sheet. Please check storage and RLS policies."
+      );
+    } finally {
+      setUploadingSheet(false);
+    }
+  }
+
+  async function handleOpenPaperUpload(upload) {
+    if (!upload?.file_path) {
+      setUploadError("This upload is missing a file path.");
+      return;
+    }
+
+    setUploadError("");
+
+    try {
+      const { data, error } = await supabase.storage
+        .from("paper-sheets")
+        .createSignedUrl(upload.file_path, 60 * 10);
+
+      if (error) throw error;
+
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      console.error(error);
+      setUploadError(
+        error?.message ||
+          "Unable to open uploaded file. Please check storage policies."
+      );
+    }
+  }
+
+  async function handleDeletePaperUpload(upload) {
+    const confirmed = window.confirm(
+      "Are you sure you want to delete this uploaded paper sheet?"
+    );
+
+    if (!confirmed) return;
+
+    setUploadError("");
+    setUploadSuccess("");
+
+    try {
+      const { error: deleteFileError } = await supabase.storage
+        .from("paper-sheets")
+        .remove([upload.file_path]);
+
+      if (deleteFileError) throw deleteFileError;
+
+      const { error: deleteRowError } = await supabase
+        .from("paper_sheet_uploads")
+        .delete()
+        .eq("id", upload.id);
+
+      if (deleteRowError) throw deleteRowError;
+
+      await refreshPaperUploads(profile.id);
+      setUploadSuccess("Paper sheet upload deleted.");
+    } catch (error) {
+      console.error(error);
+      setUploadError(error?.message || "Unable to delete upload.");
+    }
+  }
+
   async function handleLogout() {
     await signOutUser();
     navigate("/login");
@@ -758,7 +934,24 @@ export default function WorkerDashboard() {
               />
             )}
 
-            {activeView === "upload" && <UploadSheetView />}
+            {activeView === "upload" && (
+              <UploadSheetView
+                profile={profile}
+                uploads={paperUploads}
+                uploadMonthKey={uploadMonthKey}
+                setUploadMonthKey={setUploadMonthKey}
+                uploadNotes={uploadNotes}
+                setUploadNotes={setUploadNotes}
+                uploadFile={uploadFile}
+                onFileChange={handlePaperSheetFileChange}
+                onUpload={handleUploadPaperSheet}
+                uploadingSheet={uploadingSheet}
+                uploadError={uploadError}
+                uploadSuccess={uploadSuccess}
+                onOpenUpload={handleOpenPaperUpload}
+                onDeleteUpload={handleDeletePaperUpload}
+              />
+            )}
 
             {activeView === "messages" && (
               <MessagesView
@@ -1645,9 +1838,24 @@ function HistoryView({
   );
 }
 
-function UploadSheetView() {
+function UploadSheetView({
+  profile,
+  uploads,
+  uploadMonthKey,
+  setUploadMonthKey,
+  uploadNotes,
+  setUploadNotes,
+  uploadFile,
+  onFileChange,
+  onUpload,
+  uploadingSheet,
+  uploadError,
+  uploadSuccess,
+  onOpenUpload,
+  onDeleteUpload,
+}) {
   return (
-    <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+    <section className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
       <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
         <div className="mb-6 inline-flex rounded-2xl bg-blue-50 p-3 text-blue-600">
           <FileUp size={28} />
@@ -1656,71 +1864,198 @@ function UploadSheetView() {
         <SectionTitle
           eyebrow="Paper Sheet Upload"
           title="Upload Mileage Form"
-          text="Workers will be able to upload a scanned paper mileage form. The AI will convert it into editable draft rows before final submission."
+          text="Upload a photo or PDF of a paper mileage sheet. Admin will review it and update the status in real time."
         />
 
-        <div className="mt-6 rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/50 p-8 text-center">
-          <Bot className="mx-auto text-blue-600" size={42} />
+        <form onSubmit={onUpload} className="mt-6 space-y-5">
+          <div className="rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/50 p-6 text-center">
+            <FileUp className="mx-auto text-blue-600" size={42} />
 
-          <h3 className="mt-4 text-lg font-black text-slate-950">
-            AI Conversion Workflow
-          </h3>
+            <h3 className="mt-4 text-lg font-black text-slate-950">
+              Choose Paper Sheet File
+            </h3>
 
-          <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-600">
-            Upload image or PDF. AI reads the rows, extracts date, property,
-            odometer, miles, and purpose, then lets the worker edit before
-            saving.
-          </p>
+            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-600">
+              Accepted file types: JPG, PNG, WEBP, or PDF. Maximum file size is
+              10 MB.
+            </p>
 
-          <input
-            type="file"
-            accept="image/*,.pdf"
-            className="mt-6 block w-full cursor-pointer rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-sm file:mr-4 file:rounded-xl file:border-0 file:bg-blue-600 file:px-4 file:py-2 file:font-bold file:text-white"
-            onChange={() =>
-              alert("File upload and AI conversion will be connected later.")
-            }
-          />
-        </div>
+            <input
+              id="paper-sheet-file-input"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf"
+              onChange={onFileChange}
+              className="mt-6 block w-full cursor-pointer rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-sm file:mr-4 file:rounded-xl file:border-0 file:bg-blue-600 file:px-4 file:py-2 file:font-bold file:text-white"
+            />
+
+            {uploadFile && (
+              <div className="mt-4 rounded-2xl bg-white p-4 text-left ring-1 ring-slate-200">
+                <p className="text-sm font-black text-slate-950">
+                  Selected File
+                </p>
+                <p className="mt-1 break-words text-sm text-slate-600">
+                  {uploadFile.name}
+                </p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {formatFileSize(uploadFile.size)} • {uploadFile.type || "file"}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <FormField label="Mileage Month">
+              <input
+                type="month"
+                required
+                value={uploadMonthKey}
+                onChange={(event) => setUploadMonthKey(event.target.value)}
+                className={inputClass}
+              />
+            </FormField>
+
+            <FormField label="Worker">
+              <input
+                type="text"
+                value={profile?.full_name || "Worker"}
+                disabled
+                className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 font-bold text-slate-500"
+              />
+            </FormField>
+          </div>
+
+          <FormField label="Notes For Admin">
+            <textarea
+              rows="5"
+              value={uploadNotes}
+              onChange={(event) => setUploadNotes(event.target.value)}
+              placeholder="Example: This is my May mileage sheet. I circled one row that needs review."
+              className="w-full resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+            />
+          </FormField>
+
+          {uploadError && <AlertBox type="error" message={uploadError} />}
+          {uploadSuccess && <AlertBox type="success" message={uploadSuccess} />}
+
+          <button
+            type="submit"
+            disabled={uploadingSheet || !uploadFile}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-8 py-3 font-black text-white shadow-lg shadow-blue-200 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <FileUp size={19} />
+            {uploadingSheet ? "Uploading..." : "Upload Paper Sheet"}
+          </button>
+        </form>
       </div>
 
       <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
         <SectionTitle
-          eyebrow="Review Before Submit"
-          title="Draft Entries Preview"
-          text="This area will show AI-converted rows. The worker can edit any incorrect information before submitting final mileage records."
+          eyebrow="Upload History"
+          title="Your Paper Sheets"
+          text="Track submitted paper sheets and review admin status updates."
         />
 
         <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200">
-          <table className="w-full min-w-[900px] border-collapse text-left text-sm">
-            <thead className="bg-slate-50 text-slate-600">
-              <tr>
-                <TableHeader>Date</TableHeader>
-                <TableHeader>Property</TableHeader>
-                <TableHeader>Purpose</TableHeader>
-                <TableHeader>Start</TableHeader>
-                <TableHeader>End</TableHeader>
-                <TableHeader>Miles</TableHeader>
-              </tr>
-            </thead>
+          <div className="max-h-[680px] overflow-auto">
+            <table className="w-full min-w-[980px] border-collapse text-left text-sm">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <TableHeader>Uploaded</TableHeader>
+                  <TableHeader>File</TableHeader>
+                  <TableHeader>Month</TableHeader>
+                  <TableHeader>Status</TableHeader>
+                  <TableHeader>Notes</TableHeader>
+                  <TableHeader>Admin Notes</TableHeader>
+                  <TableHeader>Action</TableHeader>
+                </tr>
+              </thead>
 
-            <tbody>
-              <tr>
-                <td colSpan="6" className="px-6 py-12 text-center">
-                  <p className="font-black text-slate-950">
-                    No uploaded sheet yet.
-                  </p>
-                  <p className="mt-2 text-sm text-slate-500">
-                    Converted draft entries will appear here.
-                  </p>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+              <tbody className="divide-y divide-slate-100">
+                {uploads.length > 0 ? (
+                  uploads.map((upload) => (
+                    <tr key={upload.id} className="bg-white">
+                      <td className="px-4 py-4 font-semibold text-slate-700">
+                        {formatDate(upload.created_at)}
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <p className="max-w-[220px] truncate font-black text-slate-950">
+                          {upload.file_name}
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">
+                          {formatFileSize(upload.file_size)}
+                        </p>
+                      </td>
+
+                      <td className="px-4 py-4 text-slate-600">
+                        {formatPaperUploadMonth(upload.month_key)}
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <PaperUploadStatusBadge status={upload.status} />
+                      </td>
+
+                      <td className="max-w-[240px] px-4 py-4 text-slate-600">
+                        <p className="line-clamp-4 leading-6">
+                          {upload.notes || "—"}
+                        </p>
+                      </td>
+
+                      <td className="max-w-[240px] px-4 py-4 text-slate-600">
+                        <p className="line-clamp-4 leading-6">
+                          {upload.admin_notes || "—"}
+                        </p>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => onOpenUpload(upload)}
+                            className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100"
+                          >
+                            <FileUp size={14} />
+                            Open
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => onDeleteUpload(upload)}
+                            className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100"
+                          >
+                            <Trash2 size={14} />
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="7" className="px-6 py-12 text-center">
+                      <div className="mx-auto max-w-sm">
+                        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                          <FileUp size={28} />
+                        </div>
+                        <h3 className="mt-4 text-lg font-black text-slate-950">
+                          No Uploads Yet
+                        </h3>
+                        <p className="mt-2 text-sm leading-6 text-slate-500">
+                          Uploaded paper mileage sheets will appear here.
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>
   );
 }
+
 
 function MessagesView({
   profile,
@@ -2169,6 +2504,85 @@ function ChatBubble({ side, name, text, createdAt }) {
       </div>
     </div>
   );
+}
+
+
+async function getWorkerPaperSheetUploads(workerId) {
+  if (!workerId) return [];
+
+  const { data, error } = await supabase
+    .from("paper_sheet_uploads")
+    .select("*")
+    .eq("worker_id", workerId)
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+
+  return data || [];
+}
+
+function isAllowedPaperSheetFile(file) {
+  const allowedTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+  ];
+
+  return allowedTypes.includes(file?.type);
+}
+
+function sanitizeFileName(fileName) {
+  return String(fileName || "paper-sheet")
+    .toLowerCase()
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
+function PaperUploadStatusBadge({ status }) {
+  const cleanStatus = String(status || "uploaded").toLowerCase();
+
+  const statusClasses = {
+    uploaded: "bg-blue-50 text-blue-700",
+    received: "bg-emerald-50 text-emerald-700",
+    reviewing: "bg-amber-50 text-amber-700",
+    converted: "bg-violet-50 text-violet-700",
+    rejected: "bg-red-50 text-red-700",
+  };
+
+  return (
+    <span
+      className={
+        "inline-flex rounded-full px-3 py-1 text-xs font-black capitalize " +
+        (statusClasses[cleanStatus] || statusClasses.uploaded)
+      }
+    >
+      {cleanStatus.replaceAll("_", " ")}
+    </span>
+  );
+}
+
+function formatPaperUploadMonth(monthKey) {
+  if (!monthKey) return "—";
+  return formatMonthKey(monthKey);
+}
+
+function formatFileSize(size) {
+  const numberSize = Number(size);
+
+  if (!numberSize || Number.isNaN(numberSize)) {
+    return "Unknown size";
+  }
+
+  if (numberSize < 1024) {
+    return numberSize + " B";
+  }
+
+  if (numberSize < 1024 * 1024) {
+    return (numberSize / 1024).toFixed(1) + " KB";
+  }
+
+  return (numberSize / (1024 * 1024)).toFixed(1) + " MB";
 }
 
 
