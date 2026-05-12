@@ -3665,23 +3665,65 @@ function escapeCsvValue(value) {
   return `"${escapedValue}"`;
 }
 
+function parseMileageDate(dateValue) {
+  if (!dateValue) return null;
+
+  if (dateValue instanceof Date) {
+    return Number.isNaN(dateValue.getTime()) ? null : dateValue;
+  }
+
+  const stringValue = String(dateValue).trim();
+
+  const dateOnlyMatch = stringValue.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (dateOnlyMatch) {
+    const year = Number(dateOnlyMatch[1]);
+    const month = Number(dateOnlyMatch[2]) - 1;
+    const day = Number(dateOnlyMatch[3]);
+
+    return new Date(year, month, day);
+  }
+
+  const timestampDate = new Date(stringValue);
+
+  if (Number.isNaN(timestampDate.getTime())) {
+    return null;
+  }
+
+  return timestampDate;
+}
+
+function toDateInputString(dateValue) {
+  if (!dateValue) return "";
+
+  const stringValue = String(dateValue).trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(stringValue)) {
+    return stringValue;
+  }
+
+  const parsedDate = parseMileageDate(dateValue);
+
+  if (!parsedDate) return "";
+
+  const year = parsedDate.getFullYear();
+  const month = String(parsedDate.getMonth() + 1).padStart(2, "0");
+  const day = String(parsedDate.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
 function toInputDateValue(dateValue) {
   if (!dateValue) {
     return getTodayInputValue();
   }
 
-  if (typeof dateValue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
-    return dateValue;
-  }
+  const inputDate = toDateInputString(dateValue);
 
-  const date = new Date(dateValue);
-
-  if (Number.isNaN(date.getTime())) {
-    return getTodayInputValue();
-  }
-
-  return date.toISOString().slice(0, 10);
+  return inputDate || getTodayInputValue();
 }
+
+
 
 function formatMiles(value) {
   const numberValue = Number(value);
@@ -3698,15 +3740,16 @@ function formatMiles(value) {
 function formatDate(dateValue) {
   if (!dateValue) return "—";
 
-  const date = new Date(dateValue);
+  const parsedDate = parseMileageDate(dateValue);
 
-  if (Number.isNaN(date.getTime())) {
+  if (!parsedDate) {
     return dateValue;
   }
 
-  return date.toLocaleDateString(undefined, {
+  return parsedDate.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
     year: "numeric",
   });
 }
+

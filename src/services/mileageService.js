@@ -5,22 +5,85 @@ export function getCurrentMonthKey() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
-export function getTodayInputValue() {
-  const now = new Date();
-  return now.toISOString().slice(0, 10);
-}
+function parseMileageDate(dateValue) {
+  if (!dateValue) return null;
 
-export function getMonthKeyFromDate(dateValue) {
-  if (!dateValue) return getCurrentMonthKey();
-
-  const date = new Date(dateValue);
-
-  if (Number.isNaN(date.getTime())) {
-    return getCurrentMonthKey();
+  if (dateValue instanceof Date) {
+    return Number.isNaN(dateValue.getTime()) ? null : dateValue;
   }
 
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  const stringValue = String(dateValue).trim();
+
+  const dateOnlyMatch = stringValue.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (dateOnlyMatch) {
+    const year = Number(dateOnlyMatch[1]);
+    const month = Number(dateOnlyMatch[2]) - 1;
+    const day = Number(dateOnlyMatch[3]);
+
+    return new Date(year, month, day);
+  }
+
+  const timestampDate = new Date(stringValue);
+
+  if (Number.isNaN(timestampDate.getTime())) {
+    return null;
+  }
+
+  return timestampDate;
 }
+
+function toDateInputString(dateValue) {
+  if (!dateValue) return "";
+
+  const stringValue = String(dateValue).trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(stringValue)) {
+    return stringValue;
+  }
+
+  const parsedDate = parseMileageDate(dateValue);
+
+  if (!parsedDate) return "";
+
+  const year = parsedDate.getFullYear();
+  const month = String(parsedDate.getMonth() + 1).padStart(2, "0");
+  const day = String(parsedDate.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+export function getTodayInputValue() {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+
+
+export function getMonthKeyFromDate(dateValue) {
+  if (!dateValue) return "";
+
+  const stringValue = String(dateValue).trim();
+
+  if (/^\d{4}-\d{2}/.test(stringValue)) {
+    return stringValue.slice(0, 7);
+  }
+
+  const parsedDate = parseMileageDate(dateValue);
+
+  if (!parsedDate) return "";
+
+  const year = parsedDate.getFullYear();
+  const month = String(parsedDate.getMonth() + 1).padStart(2, "0");
+
+  return `${year}-${month}`;
+}
+
+
 
 export function getMonthStartFromDate(dateValue) {
   const fallback = getTodayInputValue();
