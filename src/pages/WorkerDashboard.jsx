@@ -1319,11 +1319,259 @@ export default function WorkerDashboard() {
             {activeView === "help" && <HelpView />}
           </div>
         </section>
-        <WorkerHelpBot setActiveView={setActiveView} />
+        <AIWorkerHelpBot
+          setActiveView={setActiveView}
+          activeView={activeView}
+          profile={profile}
+        />
       </div>
     </main>
   );
 }
+
+
+function AIWorkerHelpBot({ setActiveView, activeView, profile }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [isThinking, setIsThinking] = useState(false);
+  const [messages, setMessages] = useState([
+    {
+      sender: "bot",
+      text:
+        "Hi! I am your Mileage Help Assistant. Ask me where to add mileage, upload a paper sheet, review history, message admin, or use route tools.",
+      actions: [
+        { label: "Add Mileage", view: "new-entry" },
+        { label: "Upload Sheet", view: "upload" },
+        { label: "Message Admin", view: "messages" },
+      ],
+    },
+  ]);
+
+  const quickPrompts = [
+    "Where do I submit mileage?",
+    "How do I upload a paper sheet?",
+    "Where can I review my records?",
+    "How do I message admin?",
+  ];
+
+  async function sendMessage(textOverride) {
+    const cleanText = String(textOverride || draft).trim();
+
+    if (!cleanText || isThinking) return;
+
+    const userMessage = {
+      sender: "user",
+      text: cleanText,
+    };
+
+    const nextMessages = [...messages, userMessage];
+
+    setMessages(nextMessages);
+    setDraft("");
+    setIsOpen(true);
+    setIsThinking(true);
+
+    try {
+      const historyForAi = nextMessages.slice(-8).map((message) => ({
+        sender: message.sender === "user" ? "user" : "assistant",
+        text: message.text,
+      }));
+
+      const { data, error } = await supabase.functions.invoke(
+        "worker-help-chat",
+        {
+          body: {
+            message: cleanText,
+            activeView,
+            workerName: profile?.full_name || "",
+            history: historyForAi,
+          },
+        }
+      );
+
+      if (error) {
+        throw error;
+      }
+
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        {
+          sender: "bot",
+          text:
+            data?.reply ||
+            "I can help with mileage entries, paper uploads, history, messages, and route tools.",
+          actions:
+            Array.isArray(data?.actions) && data.actions.length > 0
+              ? data.actions
+              : [
+                  { label: "Add Mileage", view: "new-entry" },
+                  { label: "Upload Sheet", view: "upload" },
+                  { label: "Message Admin", view: "messages" },
+                ],
+        },
+      ]);
+    } catch (error) {
+      console.error(error);
+
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        {
+          sender: "bot",
+          text:
+            "Sorry, I could not connect to the AI help assistant right now. You can still use New Mileage Entry to submit mileage, Upload Paper Sheet for files, Mileage History to review records, or Messages to contact admin.",
+          actions: [
+            { label: "Add Mileage", view: "new-entry" },
+            { label: "Upload Sheet", view: "upload" },
+            { label: "Message Admin", view: "messages" },
+          ],
+        },
+      ]);
+    } finally {
+      setIsThinking(false);
+    }
+  }
+
+  function goToView(view) {
+    setActiveView(view);
+    setIsOpen(false);
+  }
+
+  return (
+    <div className="fixed bottom-5 right-5 z-50">
+      {isOpen && (
+        <div className="mb-4 flex h-[520px] w-[370px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[2rem] bg-white shadow-2xl shadow-slate-400/30 ring-1 ring-slate-200">
+          <div className="prosper-hero-gradient flex items-center justify-between gap-4 p-4 text-white">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="shrink-0 rounded-2xl bg-white/15 p-3">
+                <Bot size={22} />
+              </div>
+
+              <div className="min-w-0">
+                <p className="truncate text-sm font-black">
+                  AI Mileage Help Assistant
+                </p>
+                <p className="text-xs font-semibold text-blue-100">
+                  Friendly app guide
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsOpen(false)}
+              className="rounded-xl bg-white/10 p-2 transition hover:bg-white/20"
+              aria-label="Close help assistant"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
+            {messages.map((message, index) => {
+              const isUser = message.sender === "user";
+
+              return (
+                <div
+                  key={index}
+                  className={isUser ? "flex justify-end" : "flex justify-start"}
+                >
+                  <div
+                    className={
+                      "max-w-[88%] rounded-3xl px-4 py-3 text-sm font-semibold leading-6 " +
+                      (isUser
+                        ? "bg-blue-600 text-white"
+                        : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200")
+                    }
+                  >
+                    <p>{message.text}</p>
+
+                    {!isUser && message.actions?.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {message.actions.map((action) => (
+                          <button
+                            key={action.label}
+                            type="button"
+                            onClick={() => goToView(action.view)}
+                            className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700 transition hover:bg-blue-100"
+                          >
+                            {action.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {isThinking && (
+              <div className="flex justify-start">
+                <div className="rounded-3xl bg-white px-4 py-3 text-sm font-black text-slate-500 shadow-sm ring-1 ring-slate-200">
+                  Thinking...
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="border-t border-slate-200 bg-white p-3">
+            <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+              {quickPrompts.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => sendMessage(prompt)}
+                  disabled={isThinking}
+                  className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600 transition hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                sendMessage();
+              }}
+              className="flex items-center gap-2"
+            >
+              <input
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                disabled={isThinking}
+                placeholder="Ask how to use the app..."
+                className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+              />
+
+              <button
+                type="submit"
+                disabled={isThinking || !draft.trim()}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                aria-label="Send help question"
+              >
+                <Send size={18} />
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        className="flex items-center gap-3 rounded-full bg-blue-600 px-5 py-4 text-sm font-black text-white shadow-2xl shadow-blue-300 transition hover:-translate-y-0.5 hover:bg-blue-700"
+      >
+        <Bot size={22} />
+        {isOpen ? "Close AI Help" : "Need Help?"}
+      </button>
+    </div>
+  );
+}
+
 
 function LogoCard({ wrapperClassName, imageClassName, fallbackClassName }) {
   const [logoIndex, setLogoIndex] = useState(0);
