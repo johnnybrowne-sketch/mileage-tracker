@@ -1319,6 +1319,7 @@ export default function WorkerDashboard() {
             {activeView === "help" && <HelpView />}
           </div>
         </section>
+        <WorkerHelpBot setActiveView={setActiveView} />
       </div>
     </main>
   );
@@ -2820,6 +2821,272 @@ function AiStatusBadge({ status }) {
 }
 
 
+
+function WorkerHelpBot({ setActiveView }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [messages, setMessages] = useState([
+    {
+      sender: "bot",
+      text:
+        "Hi! I can help you find where to add mileage, upload paper sheets, review history, message admin, or use route tools.",
+      actions: [
+        { label: "Add Mileage", view: "new-entry" },
+        { label: "Upload Sheet", view: "upload" },
+        { label: "Message Admin", view: "messages" },
+      ],
+    },
+  ]);
+
+  const quickPrompts = [
+    "Where do I submit mileage?",
+    "How do I upload a paper sheet?",
+    "Where can I review my records?",
+    "How do I message admin?",
+  ];
+
+  function getBotReply(userText) {
+    const text = String(userText || "").toLowerCase();
+
+    if (
+      text.includes("submit") ||
+      text.includes("entry") ||
+      text.includes("entries") ||
+      text.includes("mileage") ||
+      text.includes("add")
+    ) {
+      return {
+        text:
+          "To submit mileage, go to New Mileage Entry. Add the date, vehicle, property, start odometer, end odometer, and purpose, then save it.",
+        actions: [{ label: "Go To New Mileage Entry", view: "new-entry" }],
+      };
+    }
+
+    if (
+      text.includes("upload") ||
+      text.includes("paper") ||
+      text.includes("sheet") ||
+      text.includes("file") ||
+      text.includes("document") ||
+      text.includes("photo") ||
+      text.includes("pdf")
+    ) {
+      return {
+        text:
+          "To upload a paper mileage sheet, go to Upload Paper Sheet. Choose your file, select the month, add notes if needed, and upload it. Admin can review it even if AI conversion is not used.",
+        actions: [{ label: "Go To Upload Paper Sheet", view: "upload" }],
+      };
+    }
+
+    if (
+      text.includes("history") ||
+      text.includes("records") ||
+      text.includes("past") ||
+      text.includes("download") ||
+      text.includes("csv")
+    ) {
+      return {
+        text:
+          "To review saved mileage records, go to Mileage History. You can check entries for the selected month, edit corrections, delete mistakes, or download your CSV.",
+        actions: [{ label: "Go To Mileage History", view: "history" }],
+      };
+    }
+
+    if (
+      text.includes("admin") ||
+      text.includes("message") ||
+      text.includes("chat") ||
+      text.includes("help") ||
+      text.includes("question") ||
+      text.includes("correction")
+    ) {
+      return {
+        text:
+          "To contact admin, go to Messages. You can ask about corrections, missing mileage, paper sheet uploads, or property questions.",
+        actions: [{ label: "Go To Messages", view: "messages" }],
+      };
+    }
+
+    if (
+      text.includes("route") ||
+      text.includes("map") ||
+      text.includes("address") ||
+      text.includes("location") ||
+      text.includes("directions")
+    ) {
+      return {
+        text:
+          "For route help, use the Central Wisconsin Map Search card on the Overview page. You can search a property address or city and open it in Google Maps.",
+        actions: [{ label: "Go To Overview", view: "overview" }],
+      };
+    }
+
+    if (
+      text.includes("password") ||
+      text.includes("login") ||
+      text.includes("sign in") ||
+      text.includes("account")
+    ) {
+      return {
+        text:
+          "For login or password issues, use Forgot Password on the login page. If your profile looks incorrect, message admin for help.",
+        actions: [{ label: "Message Admin", view: "messages" }],
+      };
+    }
+
+    return {
+      text:
+        "I can help with mileage entries, paper uploads, mileage history, messages, route tools, and general app directions. Try asking: Where do I upload my paper sheet?",
+      actions: [
+        { label: "Add Mileage", view: "new-entry" },
+        { label: "Upload Sheet", view: "upload" },
+        { label: "View History", view: "history" },
+      ],
+    };
+  }
+
+  function sendMessage(textOverride) {
+    const cleanText = String(textOverride || draft).trim();
+
+    if (!cleanText) return;
+
+    const reply = getBotReply(cleanText);
+
+    setMessages((currentMessages) => [
+      ...currentMessages,
+      { sender: "user", text: cleanText },
+      { sender: "bot", text: reply.text, actions: reply.actions || [] },
+    ]);
+
+    setDraft("");
+    setIsOpen(true);
+  }
+
+  function goToView(view) {
+    setActiveView(view);
+    setIsOpen(false);
+  }
+
+  return (
+    <div className="fixed bottom-5 right-5 z-50">
+      {isOpen && (
+        <div className="mb-4 flex h-[520px] w-[360px] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-[2rem] bg-white shadow-2xl shadow-slate-400/30 ring-1 ring-slate-200">
+          <div className="prosper-hero-gradient flex items-center justify-between gap-4 p-4 text-white">
+            <div className="flex items-center gap-3">
+              <div className="rounded-2xl bg-white/15 p-3">
+                <Bot size={22} />
+              </div>
+
+              <div>
+                <p className="text-sm font-black">Mileage Help Assistant</p>
+                <p className="text-xs font-semibold text-blue-100">
+                  Friendly app guide
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsOpen(false)}
+              className="rounded-xl bg-white/10 p-2 transition hover:bg-white/20"
+              aria-label="Close help assistant"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
+            {messages.map((message, index) => {
+              const isUser = message.sender === "user";
+
+              return (
+                <div
+                  key={index}
+                  className={isUser ? "flex justify-end" : "flex justify-start"}
+                >
+                  <div
+                    className={
+                      "max-w-[88%] rounded-3xl px-4 py-3 text-sm font-semibold leading-6 " +
+                      (isUser
+                        ? "bg-blue-600 text-white"
+                        : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200")
+                    }
+                  >
+                    <p>{message.text}</p>
+
+                    {!isUser && message.actions?.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {message.actions.map((action) => (
+                          <button
+                            key={action.label}
+                            type="button"
+                            onClick={() => goToView(action.view)}
+                            className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700 transition hover:bg-blue-100"
+                          >
+                            {action.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="border-t border-slate-200 bg-white p-3">
+            <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+              {quickPrompts.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => sendMessage(prompt)}
+                  className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600 transition hover:bg-blue-50 hover:text-blue-700"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                sendMessage();
+              }}
+              className="flex items-center gap-2"
+            >
+              <input
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="Ask how to use the app..."
+                className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              />
+
+              <button
+                type="submit"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700"
+                aria-label="Send help question"
+              >
+                <Send size={18} />
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        className="flex items-center gap-3 rounded-full bg-blue-600 px-5 py-4 text-sm font-black text-white shadow-2xl shadow-blue-300 transition hover:-translate-y-0.5 hover:bg-blue-700"
+      >
+        <Bot size={22} />
+        {isOpen ? "Close Help" : "Need Help?"}
+      </button>
+    </div>
+  );
+}
+
+
 function MessagesView({
   profile,
   messages,
@@ -2861,25 +3128,6 @@ function MessagesView({
               Use this chat for missing mileage details, property questions,
               correction requests, or paper sheet upload help.
             </p>
-          </div>
-
-          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-black text-slate-950">
-                  Conversation Status
-                </p>
-                <p className="mt-1 text-xs font-semibold text-emerald-600">
-                  Real-time messaging enabled
-                </p>
-              </div>
-
-              {unreadAdminCount > 0 && (
-                <span className="rounded-full bg-blue-600 px-3 py-1 text-xs font-black text-white">
-                  {unreadAdminCount} new
-                </span>
-              )}
-            </div>
           </div>
         </div>
       </div>

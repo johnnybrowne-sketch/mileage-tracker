@@ -2646,7 +2646,7 @@ function ReportsView({
 
       <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200">
         <MileageTable
-          entries={filteredEntries.slice(0, 15)}
+          entries={filteredEntries}
           workerMap={workerMap}
           compact
         />
