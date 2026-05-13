@@ -207,7 +207,7 @@ export default function Login() {
                         Dashboard Preview
                       </p>
                       <h2 className="mt-2 text-3xl font-black">
-                        Private After Sign-In
+                        Worker Dashboard Preview
                       </h2>
                     </div>
 
@@ -331,21 +331,7 @@ export default function Login() {
               </div>
             </form>
 
-            <div className="mt-6 rounded-3xl border border-blue-100 bg-blue-50 p-5">
-              <div className="flex gap-4">
-                <div className="rounded-2xl bg-[#2f8fc8] p-3 text-white">
-                  <ShieldCheck size={22} />
-                </div>
-
-                <div>
-                  <p className="font-black text-slate-950">Admin Access</p>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">
-                    Admins use the same login page. The app checks your
-                    Supabase worker profile role after sign-in.
-                  </p>
-                </div>
-              </div>
-            </div>
+            
 
             <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-5">
               <div className="flex items-center gap-3">
