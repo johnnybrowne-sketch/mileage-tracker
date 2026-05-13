@@ -1330,15 +1330,14 @@ export default function WorkerDashboard() {
 }
 
 
-function AIWorkerHelpBot({ setActiveView, activeView, profile }) {
+function AIWorkerHelpBot({ setActiveView }) {
   const [isOpen, setIsOpen] = useState(false);
   const [draft, setDraft] = useState("");
-  const [isThinking, setIsThinking] = useState(false);
   const [messages, setMessages] = useState([
     {
       sender: "bot",
       text:
-        "Hi! I am your Mileage Help Assistant. Ask me where to add mileage, upload a paper sheet, review history, message admin, or use route tools.",
+        "Hi! I can help you use the Mileage Tracker. Ask me where to add mileage, upload paper sheets, review records, message admin, or check route tools.",
       actions: [
         { label: "Add Mileage", view: "new-entry" },
         { label: "Upload Sheet", view: "upload" },
@@ -1354,85 +1353,235 @@ function AIWorkerHelpBot({ setActiveView, activeView, profile }) {
     "How do I message admin?",
   ];
 
-  async function sendMessage(textOverride) {
+  function getBotReply(userText) {
+    const text = String(userText || "").toLowerCase().trim();
+
+    if (
+      text === "hi" ||
+      text === "hello" ||
+      text === "hey" ||
+      text === "good morning" ||
+      text === "good afternoon" ||
+      text === "good evening"
+    ) {
+      return {
+        text:
+          "Hi! How can I help you today? I can guide you to add mileage, upload a paper sheet, review records, message admin, or use the map search.",
+        actions: [
+          { label: "Add Mileage", view: "new-entry" },
+          { label: "Upload Sheet", view: "upload" },
+          { label: "Message Admin", view: "messages" },
+        ],
+      };
+    }
+
+    if (
+      text === "thanks" ||
+      text === "thank you" ||
+      text === "thankyou" ||
+      text === "ty" ||
+      text === "thank you!" ||
+      text === "thanks!"
+    ) {
+      return {
+        text:
+          "You are welcome! Let me know if you need help finding anything in the Mileage Tracker.",
+        actions: [
+          { label: "View History", view: "history" },
+          { label: "Message Admin", view: "messages" },
+        ],
+      };
+    }
+
+    if (
+      text === "ok" ||
+      text === "okay" ||
+      text === "got it" ||
+      text === "alright" ||
+      text === "nice" ||
+      text === "cool"
+    ) {
+      return {
+        text:
+          "Sounds good. I am here if you need help using any part of the app.",
+        actions: [
+          { label: "Add Mileage", view: "new-entry" },
+          { label: "Upload Sheet", view: "upload" },
+        ],
+      };
+    }
+
+    if (
+      text.includes("who are you") ||
+      text.includes("what can you do") ||
+      text.includes("what do you do")
+    ) {
+      return {
+        text:
+          "I am the Mileage Help Assistant. I can guide you around the app, explain where to submit mileage, upload paper sheets, review records, message admin, and use route tools.",
+        actions: [
+          { label: "Add Mileage", view: "new-entry" },
+          { label: "Upload Sheet", view: "upload" },
+          { label: "View History", view: "history" },
+        ],
+      };
+    }
+
+    if (
+
+      text.includes("submit") ||
+      text.includes("entry") ||
+      text.includes("entries") ||
+      text.includes("mileage") ||
+      text.includes("odometer") ||
+      text.includes("add") ||
+      text.includes("trip")
+    ) {
+      return {
+        text:
+          "Go to New Mileage Entry. Add the date, vehicle, property, start odometer, end odometer, and purpose. The app will calculate the miles, then you can save the entry.",
+        actions: [{ label: "Go To New Mileage Entry", view: "new-entry" }],
+      };
+    }
+
+    if (
+      text.includes("upload") ||
+      text.includes("paper") ||
+      text.includes("sheet") ||
+      text.includes("file") ||
+      text.includes("document") ||
+      text.includes("photo") ||
+      text.includes("pdf") ||
+      text.includes("picture")
+    ) {
+      return {
+        text:
+          "Go to Upload Paper Sheet. Choose your photo, PDF, or document, select the mileage month, add notes if needed, and upload it. Admin can review the file even if AI conversion is not used.",
+        actions: [{ label: "Go To Upload Paper Sheet", view: "upload" }],
+      };
+    }
+
+    if (
+      text.includes("history") ||
+      text.includes("records") ||
+      text.includes("old") ||
+      text.includes("past") ||
+      text.includes("download") ||
+      text.includes("csv") ||
+      text.includes("edit") ||
+      text.includes("delete")
+    ) {
+      return {
+        text:
+          "Go to Mileage History. You can review saved mileage records, edit corrections, delete mistakes, or download a CSV for the selected month.",
+        actions: [{ label: "Go To Mileage History", view: "history" }],
+      };
+    }
+
+    if (
+      text.includes("admin") ||
+      text.includes("message") ||
+      text.includes("chat") ||
+      text.includes("question") ||
+      text.includes("correction") ||
+      text.includes("help") ||
+      text.includes("wrong")
+    ) {
+      return {
+        text:
+          "Go to Messages. You can ask admin about corrections, missing mileage, property questions, paper sheet uploads, or anything you need help reviewing.",
+        actions: [{ label: "Go To Messages", view: "messages" }],
+      };
+    }
+
+    if (
+      text.includes("route") ||
+      text.includes("map") ||
+      text.includes("address") ||
+      text.includes("location") ||
+      text.includes("direction") ||
+      text.includes("google")
+    ) {
+      return {
+        text:
+          "Go to Overview and use the Central Wisconsin Map Search card. Search a property address, city, or destination, then open it in Google Maps.",
+        actions: [{ label: "Go To Overview", view: "overview" }],
+      };
+    }
+
+    if (
+      text.includes("password") ||
+      text.includes("login") ||
+      text.includes("sign in") ||
+      text.includes("account")
+    ) {
+      return {
+        text:
+          "For password issues, use Forgot Password on the login page. If your worker profile or access looks wrong, send admin a message.",
+        actions: [{ label: "Message Admin", view: "messages" }],
+      };
+    }
+
+    if (
+      text.includes("vehicle") ||
+      text.includes("car") ||
+      text.includes("van")
+    ) {
+      return {
+        text:
+          "Your available vehicle options appear inside New Mileage Entry. If the vehicle list looks wrong or a vehicle is missing, send admin a message.",
+        actions: [
+          { label: "Go To New Mileage Entry", view: "new-entry" },
+          { label: "Message Admin", view: "messages" },
+        ],
+      };
+    }
+
+    if (
+      text.includes("property") ||
+      text.includes("code") ||
+      text.includes("building")
+    ) {
+      return {
+        text:
+          "When adding mileage, choose or search the property in New Mileage Entry. If you cannot find the correct property or property code, message admin for help.",
+        actions: [
+          { label: "Go To New Mileage Entry", view: "new-entry" },
+          { label: "Message Admin", view: "messages" },
+        ],
+      };
+    }
+
+    return {
+      text:
+        "I can help you find the right place in the app. You can add mileage, upload paper sheets, review history, message admin, or use the map search from Overview.",
+      actions: [
+        { label: "Add Mileage", view: "new-entry" },
+        { label: "Upload Sheet", view: "upload" },
+        { label: "Message Admin", view: "messages" },
+      ],
+    };
+  }
+
+  function sendMessage(textOverride) {
     const cleanText = String(textOverride || draft).trim();
 
-    if (!cleanText || isThinking) return;
+    if (!cleanText) return;
 
-    const userMessage = {
-      sender: "user",
-      text: cleanText,
-    };
+    const reply = getBotReply(cleanText);
 
-    const nextMessages = [...messages, userMessage];
+    setMessages((currentMessages) => [
+      ...currentMessages,
+      { sender: "user", text: cleanText },
+      {
+        sender: "bot",
+        text: reply.text,
+        actions: reply.actions || [],
+      },
+    ]);
 
-    setMessages(nextMessages);
     setDraft("");
     setIsOpen(true);
-    setIsThinking(true);
-
-    try {
-      const historyForAi = nextMessages.slice(-8).map((message) => ({
-        sender: message.sender === "user" ? "user" : "assistant",
-        text: message.text,
-      }));
-
-      const { data, error } = await supabase.functions.invoke(
-        "worker-help-chat",
-        {
-          body: {
-            message: cleanText,
-            activeView,
-            workerName: profile?.full_name || "",
-            history: historyForAi,
-          },
-        }
-      );
-
-      if (error) {
-        throw error;
-      }
-
-      if (data?.error) {
-        throw new Error(data.error);
-      }
-
-      setMessages((currentMessages) => [
-        ...currentMessages,
-        {
-          sender: "bot",
-          text:
-            data?.reply ||
-            "I can help with mileage entries, paper uploads, history, messages, and route tools.",
-          actions:
-            Array.isArray(data?.actions) && data.actions.length > 0
-              ? data.actions
-              : [
-                  { label: "Add Mileage", view: "new-entry" },
-                  { label: "Upload Sheet", view: "upload" },
-                  { label: "Message Admin", view: "messages" },
-                ],
-        },
-      ]);
-    } catch (error) {
-      console.error(error);
-
-      setMessages((currentMessages) => [
-        ...currentMessages,
-        {
-          sender: "bot",
-          text:
-            "Sorry, I could not connect to the AI help assistant right now. You can still use New Mileage Entry to submit mileage, Upload Paper Sheet for files, Mileage History to review records, or Messages to contact admin.",
-          actions: [
-            { label: "Add Mileage", view: "new-entry" },
-            { label: "Upload Sheet", view: "upload" },
-            { label: "Message Admin", view: "messages" },
-          ],
-        },
-      ]);
-    } finally {
-      setIsThinking(false);
-    }
   }
 
   function goToView(view) {
@@ -1452,10 +1601,7 @@ function AIWorkerHelpBot({ setActiveView, activeView, profile }) {
 
               <div className="min-w-0">
                 <p className="truncate text-sm font-black">
-                  AI Mileage Help Assistant
-                </p>
-                <p className="text-xs font-semibold text-blue-100">
-                  Friendly app guide
+                  Mileage Help Assistant
                 </p>
               </div>
             </div>
@@ -1507,14 +1653,6 @@ function AIWorkerHelpBot({ setActiveView, activeView, profile }) {
                 </div>
               );
             })}
-
-            {isThinking && (
-              <div className="flex justify-start">
-                <div className="rounded-3xl bg-white px-4 py-3 text-sm font-black text-slate-500 shadow-sm ring-1 ring-slate-200">
-                  Thinking...
-                </div>
-              </div>
-            )}
           </div>
 
           <div className="border-t border-slate-200 bg-white p-3">
@@ -1524,8 +1662,7 @@ function AIWorkerHelpBot({ setActiveView, activeView, profile }) {
                   key={prompt}
                   type="button"
                   onClick={() => sendMessage(prompt)}
-                  disabled={isThinking}
-                  className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600 transition hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600 transition hover:bg-blue-50 hover:text-blue-700"
                 >
                   {prompt}
                 </button>
@@ -1542,14 +1679,13 @@ function AIWorkerHelpBot({ setActiveView, activeView, profile }) {
               <input
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
-                disabled={isThinking}
                 placeholder="Ask how to use the app..."
-                className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
               />
 
               <button
                 type="submit"
-                disabled={isThinking || !draft.trim()}
+                disabled={!draft.trim()}
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 aria-label="Send help question"
               >
@@ -1566,12 +1702,11 @@ function AIWorkerHelpBot({ setActiveView, activeView, profile }) {
         className="flex items-center gap-3 rounded-full bg-blue-600 px-5 py-4 text-sm font-black text-white shadow-2xl shadow-blue-300 transition hover:-translate-y-0.5 hover:bg-blue-700"
       >
         <Bot size={22} />
-        {isOpen ? "Close AI Help" : "Need Help?"}
+        {isOpen ? "Close Help" : "Need Help?"}
       </button>
     </div>
   );
 }
-
 
 function LogoCard({ wrapperClassName, imageClassName, fallbackClassName }) {
   const [logoIndex, setLogoIndex] = useState(0);
@@ -3228,7 +3363,7 @@ function WorkerHelpBot({ setActiveView }) {
               <div>
                 <p className="text-sm font-black">Mileage Help Assistant</p>
                 <p className="text-xs font-semibold text-blue-100">
-                  Friendly app guide
+                  
                 </p>
               </div>
             </div>
