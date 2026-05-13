@@ -20,3 +20,90 @@ select,
 textarea {
   font: inherit;
 }
+
+/* =====================================================
+   Prosper Mileage Tracker Final UI Polish
+   Brand-inspired palette:
+   - Prosper Blue: #2f8fc8
+   - Deep Navy: #071527
+   - Fresh Green: #6faa36
+   - Soft Sky: #eef7fb
+===================================================== */
+
+:root {
+  --prosper-navy: #071527;
+  --prosper-blue: #2f8fc8;
+  --prosper-blue-dark: #1f6f9f;
+  --prosper-sky: #eef7fb;
+  --prosper-green: #6faa36;
+  --prosper-green-dark: #4f8526;
+  --prosper-ink: #0f172a;
+  --prosper-muted: #64748b;
+  --prosper-card: #ffffff;
+  --prosper-line: #d9e6f0;
+  --prosper-shadow: 0 22px 60px rgba(15, 23, 42, 0.08);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background:
+    radial-gradient(circle at top left, rgba(47, 143, 200, 0.12), transparent 34rem),
+    radial-gradient(circle at top right, rgba(111, 170, 54, 0.08), transparent 30rem),
+    #eef3f9;
+  color: var(--prosper-ink);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+::selection {
+  background: rgba(47, 143, 200, 0.2);
+  color: var(--prosper-navy);
+}
+
+.prosper-glass-card {
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.92), rgba(255,255,255,0.78));
+  border: 1px solid rgba(217, 230, 240, 0.9);
+  box-shadow: var(--prosper-shadow);
+  backdrop-filter: blur(18px);
+}
+
+.prosper-hero-gradient {
+  background:
+    radial-gradient(circle at 8% 10%, rgba(47, 143, 200, 0.35), transparent 28rem),
+    radial-gradient(circle at 92% 18%, rgba(111, 170, 54, 0.24), transparent 26rem),
+    linear-gradient(135deg, #071527 0%, #0b1f3a 48%, #123b56 100%);
+}
+
+.prosper-map-grid {
+  background-image:
+    linear-gradient(rgba(47, 143, 200, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(47, 143, 200, 0.12) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+.prosper-soft-ring {
+  box-shadow:
+    0 0 0 1px rgba(47, 143, 200, 0.08),
+    0 22px 55px rgba(15, 23, 42, 0.08);
+}
