@@ -374,6 +374,28 @@ export default function AdminDashboard() {
     );
   }, [editForm.startOdometer, editForm.endOdometer]);
 
+  const sidebarBadgeCounts = useMemo(() => {
+    const unreadMessages = messages.filter((message) => {
+      return message.sender_role === "driver" && message.is_read === false;
+    }).length;
+
+    const pendingPaperUploads = paperUploads.filter((upload) => {
+      const status = String(upload.status || "uploaded").toLowerCase();
+      const aiStatus = String(upload.ai_status || "").toLowerCase();
+
+      return (
+        status === "uploaded" ||
+        status === "received" ||
+        status === "reviewing" ||
+        aiStatus === "failed"
+      );
+    }).length;
+
+    return {
+      messages: unreadMessages,
+      "paper-sheets": pendingPaperUploads,
+    };
+  }, [messages, paperUploads]);
   useEffect(() => {
     loadAdminDashboard();
   }, []);
@@ -1120,7 +1142,7 @@ export default function AdminDashboard() {
       await Promise.all([refreshPaperUploads(), refreshPaperDraftEntries()]);
 
       setSelectedPaperUploadId(upload.id);
-      setPaperUploadSuccess("AI conversion finished. Draft rows are ready for review.");
+      setPaperUploadSuccess("AI conversion finished. Draft rows are ready for review. The original uploaded document remains available for manual admin review.");
     } catch (error) {
       console.error(error);
       setPaperUploadError(
@@ -1259,6 +1281,7 @@ export default function AdminDashboard() {
             profile={adminProfile}
             user={user}
             onLogout={handleLogout}
+            badgeCounts={sidebarBadgeCounts}
           />
         </aside>
 
@@ -1273,7 +1296,7 @@ export default function AdminDashboard() {
                 />
 
                 <div>
-                  <p className="text-sm font-black uppercase tracking-wide text-blue-600">
+                  <p className="text-sm font-black uppercase tracking-wide text-[#2f8fc8]">
                     Admin Portal
                   </p>
                   <h1 className="text-xl font-black text-slate-950 md:text-2xl">
@@ -1308,7 +1331,11 @@ export default function AdminDashboard() {
           </header>
 
           <div className="mx-auto max-w-[1900px] px-6 py-8 xl:px-10">
-            <MobileNav activeView={activeView} setActiveView={setActiveView} />
+            <MobileNav
+              activeView={activeView}
+              setActiveView={setActiveView}
+              badgeCounts={sidebarBadgeCounts}
+            />
 
             {dataError && (
               <div className="mb-6 rounded-3xl border border-red-200 bg-red-50 p-5 text-sm font-semibold leading-6 text-red-700">
@@ -1464,7 +1491,14 @@ export default function AdminDashboard() {
   );
 }
 
-function SidebarContent({ activeView, setActiveView, profile, user, onLogout }) {
+function SidebarContent({
+  activeView,
+  setActiveView,
+  profile,
+  user,
+  onLogout,
+  badgeCounts = {},
+}) {
   return (
     <>
       <div className="border-b border-slate-200 p-5">
@@ -1476,7 +1510,7 @@ function SidebarContent({ activeView, setActiveView, profile, user, onLogout }) 
           />
 
           <div className="mt-4">
-            <p className="text-xs font-black uppercase tracking-[0.2em] text-blue-600">
+            <p className="text-xs font-black uppercase tracking-[0.2em] text-[#2f8fc8]">
               Admin Portal
             </p>
             <h2 className="mt-1 text-xl font-black text-slate-950">
@@ -1492,7 +1526,7 @@ function SidebarContent({ activeView, setActiveView, profile, user, onLogout }) 
       <div className="p-4">
         <div className="rounded-3xl bg-slate-50 p-4 ring-1 ring-slate-200">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-blue-600 shadow-sm ring-1 ring-slate-200">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-[#2f8fc8] shadow-sm ring-1 ring-slate-200">
               <ShieldCheck size={22} />
             </div>
 
@@ -1517,20 +1551,35 @@ function SidebarContent({ activeView, setActiveView, profile, user, onLogout }) 
         {navigationItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeView === item.id;
+          const badgeCount = Number(badgeCounts[item.id] || 0);
 
           return (
             <button
               key={item.id}
               type="button"
               onClick={() => setActiveView(item.id)}
-              className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-black transition ${
+              className={`flex w-full items-center justify-between gap-3 rounded-2xl px-4 py-3 text-left text-sm font-black transition ${
                 isActive
-                  ? "bg-blue-600 text-white shadow-lg shadow-blue-100"
+                  ? "bg-[#2f8fc8] text-white shadow-lg shadow-blue-100"
                   : "text-slate-600 hover:bg-slate-50 hover:text-slate-950"
               }`}
             >
-              <Icon size={19} />
-              {item.label}
+              <span className="flex min-w-0 items-center gap-3">
+                <Icon size={19} />
+                <span className="truncate">{item.label}</span>
+              </span>
+
+              {badgeCount > 0 && (
+                <span
+                  className={`ml-auto rounded-full px-2.5 py-1 text-xs font-black ${
+                    isActive
+                      ? "bg-white text-blue-700"
+                      : "bg-red-500 text-white"
+                  }`}
+                >
+                  {badgeCount > 99 ? "99+" : badgeCount}
+                </span>
+              )}
             </button>
           );
         })}
@@ -1550,27 +1599,42 @@ function SidebarContent({ activeView, setActiveView, profile, user, onLogout }) 
   );
 }
 
-function MobileNav({ activeView, setActiveView }) {
+function MobileNav({ activeView, setActiveView, badgeCounts = {} }) {
   return (
     <div className="mb-6 rounded-3xl bg-white p-3 shadow-sm ring-1 ring-slate-200 lg:hidden">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {navigationItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeView === item.id;
+          const badgeCount = Number(badgeCounts[item.id] || 0);
 
           return (
             <button
               key={item.id}
               type="button"
               onClick={() => setActiveView(item.id)}
-              className={`flex items-center justify-center gap-2 rounded-2xl px-3 py-3 text-xs font-black transition ${
+              className={`relative flex items-center justify-center gap-2 rounded-2xl px-3 py-3 text-xs font-black transition ${
                 isActive
-                  ? "bg-blue-600 text-white"
+                  ? "bg-[#2f8fc8] text-white"
                   : "bg-slate-50 text-slate-600"
               }`}
             >
-              <Icon size={16} />
-              {item.label}
+              <span className="flex items-center gap-2">
+                <Icon size={16} />
+                <span>{item.label}</span>
+              </span>
+
+              {badgeCount > 0 && (
+                <span
+                  className={`absolute right-1 top-1 rounded-full px-2 py-0.5 text-[10px] font-black ${
+                    isActive
+                      ? "bg-white text-blue-700"
+                      : "bg-red-500 text-white"
+                  }`}
+                >
+                  {badgeCount > 99 ? "99+" : badgeCount}
+                </span>
+              )}
             </button>
           );
         })}
@@ -1603,7 +1667,7 @@ function LogoCard({ wrapperClassName, imageClassName, fallbackClassName }) {
         />
       ) : (
         <div
-          className={`flex items-center justify-center rounded-2xl bg-blue-600 text-white ${fallbackClassName}`}
+          className={`flex items-center justify-center rounded-2xl bg-[#2f8fc8] text-white ${fallbackClassName}`}
         >
           <Route size={24} />
         </div>
@@ -1625,7 +1689,7 @@ function OverviewView({
 }) {
   return (
     <div className="space-y-6">
-      <section className="overflow-hidden rounded-[2rem] bg-slate-950 text-white shadow-xl">
+      <section className="prosper-hero-gradient overflow-hidden rounded-[2rem] text-white shadow-xl">
         <div className="relative p-7 md:p-8">
           <div className="absolute right-0 top-0 h-48 w-48 rounded-full bg-blue-500/20 blur-3xl" />
           <div className="absolute bottom-0 left-20 h-40 w-40 rounded-full bg-cyan-400/10 blur-3xl" />
@@ -1641,9 +1705,7 @@ function OverviewView({
             </h2>
 
             <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
-              Review worker mileage, correct entries, add missing records,
-              finalize entries, and download monthly reports. Updates, deletes,
-              and new entries sync live through Supabase Realtime.
+              Review worker mileage, manage corrections, approve entries, monitor uploads, and download reports from one professional live dashboard.
             </p>
 
             <div className="mt-8 grid gap-4 sm:grid-cols-3">
@@ -1748,7 +1810,7 @@ function OverviewView({
                   className="flex items-center justify-between gap-4 rounded-3xl bg-slate-50 p-4 ring-1 ring-slate-200"
                 >
                   <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-sm font-black text-white">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#2f8fc8] text-sm font-black text-white">
                       {index + 1}
                     </div>
 
@@ -1909,7 +1971,7 @@ function AdminAddEntryView({
           titleClassName="text-3xl"
         />
 
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-[#2f8fc8]">
           <Plus size={24} />
         </div>
       </div>
@@ -2039,7 +2101,7 @@ function AdminAddEntryView({
           <button
             type="submit"
             disabled={savingAdd}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-8 py-3 font-black text-white shadow-lg shadow-blue-200 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70 md:w-auto"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#2f8fc8] px-8 py-3 font-black text-white shadow-lg shadow-blue-200 transition hover:bg-[#1f6f9f] disabled:cursor-not-allowed disabled:opacity-70 md:w-auto"
           >
             <Save size={19} />
             {savingAdd ? "Saving Entry..." : "Save Entry For Worker"}
@@ -2289,7 +2351,7 @@ function EditMileageEntryPanel({
           <button
             type="submit"
             disabled={savingEdit}
-            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-6 py-3 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#2f8fc8] px-6 py-3 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-[#1f6f9f] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Save size={17} />
             {savingEdit ? "Saving Changes..." : "Save Changes"}
@@ -2400,7 +2462,7 @@ function WorkersView({
                 <tr key={summary.worker.id} className="bg-white">
                   <td className="px-4 py-4">
                     <div className="flex items-center gap-3">
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-[#2f8fc8]">
                         <UserRound size={22} />
                       </div>
 
@@ -2650,7 +2712,7 @@ function PaperSheetsReviewView({
           <SectionTitle
             eyebrow="Paper Sheets"
             title="Uploaded Mileage Sheets"
-            text="Review worker-uploaded paper mileage sheets, run AI conversion, open files, update status, and view extracted draft rows."
+            text="Review worker-uploaded paper mileage sheets, open documents, add notes, update status, and optionally run AI conversion when credits are available."
           />
 
           <div className="inline-flex h-12 items-center gap-2 rounded-2xl bg-blue-50 px-4 text-sm font-black text-blue-700">
@@ -2878,7 +2940,7 @@ function PaperSheetsReviewView({
                               onClick={() => onConvertUpload(upload)}
                               className="inline-flex items-center gap-2 rounded-xl bg-violet-50 px-3 py-2 text-xs font-black text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                              {isConverting ? "Converting..." : "Convert AI"}
+                              {isConverting ? "Converting..." : "Convert AI Optional"}
                             </button>
 
                             <button
@@ -3014,7 +3076,7 @@ function PaperSheetsReviewView({
                     <td colSpan="10" className="px-6 py-12">
                       <EmptyState
                         title="No Draft Rows Yet"
-                        text="Run AI conversion to extract editable mileage rows."
+                        text="Open the uploaded document for manual review, or run AI conversion when credits are available."
                       />
                     </td>
                   </tr>
@@ -3131,7 +3193,7 @@ function MessagesView({
       <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
         <div className="flex flex-col gap-4 border-b border-slate-100 pb-5">
           <div>
-            <div className="mb-4 inline-flex rounded-2xl bg-blue-50 p-3 text-blue-600">
+            <div className="mb-4 inline-flex rounded-2xl bg-blue-50 p-3 text-[#2f8fc8]">
               <MessageCircle size={28} />
             </div>
 
@@ -3166,7 +3228,7 @@ function MessagesView({
                   onClick={() => setSelectedWorkerId(item.worker.id)}
                   className={`w-full rounded-3xl p-4 text-left ring-1 transition ${
                     isActive
-                      ? "bg-blue-600 text-white ring-blue-600 shadow-lg shadow-blue-100"
+                      ? "bg-[#2f8fc8] text-white ring-blue-600 shadow-lg shadow-blue-100"
                       : "bg-slate-50 text-slate-700 ring-slate-200 hover:bg-white hover:shadow-md"
                   }`}
                 >
@@ -3176,7 +3238,7 @@ function MessagesView({
                         className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-black ${
                           isActive
                             ? "bg-white/15 text-white"
-                            : "bg-white text-blue-600 shadow-sm ring-1 ring-slate-200"
+                            : "bg-white text-[#2f8fc8] shadow-sm ring-1 ring-slate-200"
                         }`}
                       >
                         {getInitials(item.worker.full_name || item.worker.email)}
@@ -3201,7 +3263,7 @@ function MessagesView({
                         className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${
                           isActive
                             ? "bg-white text-blue-700"
-                            : "bg-blue-600 text-white"
+                            : "bg-[#2f8fc8] text-white"
                         }`}
                       >
                         {item.unreadCount}
@@ -3317,7 +3379,7 @@ function MessagesView({
             <button
               type="submit"
               disabled={!selectedWorker || sendingMessage || !messageDraft.trim()}
-              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-200 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#2f8fc8] text-white shadow-lg shadow-blue-200 transition hover:bg-[#1f6f9f] disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Send size={20} />
             </button>
@@ -3698,7 +3760,7 @@ function SectionTitle({ eyebrow, title, text, titleClassName = "text-2xl" }) {
   return (
     <div>
       {eyebrow && (
-        <p className="text-sm font-black uppercase tracking-wide text-blue-600">
+        <p className="text-sm font-black uppercase tracking-wide text-[#2f8fc8]">
           {eyebrow}
         </p>
       )}
@@ -3741,7 +3803,7 @@ function KpiCard({ icon, label, value, helper }) {
           <p className="mt-1 text-sm text-slate-500">{helper}</p>
         </div>
 
-        <div className="rounded-2xl bg-blue-50 p-3 text-blue-600">{icon}</div>
+        <div className="rounded-2xl bg-blue-50 p-3 text-[#2f8fc8]">{icon}</div>
       </div>
     </div>
   );
@@ -3754,7 +3816,7 @@ function QuickActionCard({ icon, title, text, onClick }) {
       onClick={onClick}
       className="rounded-3xl bg-slate-50 p-5 text-left ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:bg-white hover:shadow-lg"
     >
-      <div className="mb-4 inline-flex rounded-2xl bg-blue-50 p-3 text-blue-600">
+      <div className="mb-4 inline-flex rounded-2xl bg-blue-50 p-3 text-[#2f8fc8]">
         {icon}
       </div>
 
@@ -3776,7 +3838,7 @@ function DownloadButton({ entries, workerMap, fileName, label }) {
         })
       }
       disabled={!entries || entries.length === 0}
-      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#2f8fc8] px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-[#1f6f9f] disabled:cursor-not-allowed disabled:opacity-50"
     >
       <Download size={17} />
       {label}
@@ -3824,7 +3886,7 @@ function SmallInfoCard({ title, text }) {
 function EmptyState({ title, text }) {
   return (
     <div className="mx-auto flex max-w-sm flex-col items-center text-center">
-      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-[#2f8fc8]">
         <Route size={28} />
       </div>
 
@@ -3876,7 +3938,7 @@ function MessageBubble({ side, name, text, createdAt }) {
     <div className={`flex ${isRight ? "justify-end" : "justify-start"}`}>
       <div
         className={`max-w-[82%] rounded-3xl px-4 py-3 shadow-sm ${
-          isRight ? "bg-blue-600 text-white" : "bg-white text-slate-800 ring-1 ring-slate-200"
+          isRight ? "bg-[#2f8fc8] text-white" : "bg-white text-slate-800 ring-1 ring-slate-200"
         }`}
       >
         <div className="mb-1 flex items-center justify-between gap-3">

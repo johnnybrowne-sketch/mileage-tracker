@@ -166,6 +166,15 @@ export default function WorkerDashboard() {
     profile
   );
 
+  const sidebarBadgeCounts = useMemo(() => {
+    const unreadMessages = messages.filter((message) => {
+      return message.sender_role === "admin" && message.is_read === false;
+    }).length;
+
+    return {
+      messages: unreadMessages,
+    };
+  }, [messages]);
   useEffect(() => {
     loadDashboard();
   }, []);
@@ -1150,6 +1159,7 @@ export default function WorkerDashboard() {
             profile={profile}
             user={user}
             onLogout={handleLogout}
+            badgeCounts={sidebarBadgeCounts}
           />
         </aside>
 
@@ -1199,7 +1209,11 @@ export default function WorkerDashboard() {
           </header>
 
           <div className="mx-auto max-w-[1800px] px-6 py-8 xl:px-10">
-            <MobileNav activeView={activeView} setActiveView={setActiveView} />
+            <MobileNav
+              activeView={activeView}
+              setActiveView={setActiveView}
+              badgeCounts={sidebarBadgeCounts}
+            />
 
             {dataError && (
               <div className="mb-6 rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm font-semibold leading-6 text-amber-800">
@@ -1215,6 +1229,7 @@ export default function WorkerDashboard() {
                 selectedMonthEntries={selectedMonthEntries}
                 selectedMonthSummary={selectedMonthSummary}
                 activeVehicle={activeVehicle}
+                paperUploads={paperUploads}
                 setActiveView={setActiveView}
               />
             )}
@@ -1342,7 +1357,14 @@ function LogoCard({ wrapperClassName, imageClassName, fallbackClassName }) {
   );
 }
 
-function SidebarContent({ activeView, setActiveView, profile, user, onLogout }) {
+function SidebarContent({
+  activeView,
+  setActiveView,
+  profile,
+  user,
+  onLogout,
+  badgeCounts = {},
+}) {
   return (
     <>
       <div className="border-b border-slate-200 p-5">
@@ -1361,7 +1383,7 @@ function SidebarContent({ activeView, setActiveView, profile, user, onLogout }) 
               Mileage Tracker
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Track daily mileage, history, uploads, and messages.
+              Track mileage, upload paper sheets, review history, check routes, and message admin.
             </p>
           </div>
         </div>
@@ -1395,20 +1417,35 @@ function SidebarContent({ activeView, setActiveView, profile, user, onLogout }) 
         {navigationItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeView === item.id;
+          const badgeCount = Number(badgeCounts[item.id] || 0);
 
           return (
             <button
               key={item.id}
               type="button"
               onClick={() => setActiveView(item.id)}
-              className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-black transition ${
+              className={`flex w-full items-center justify-between gap-3 rounded-2xl px-4 py-3 text-left text-sm font-black transition ${
                 isActive
                   ? "bg-blue-600 text-white shadow-lg shadow-blue-100"
                   : "text-slate-600 hover:bg-slate-50 hover:text-slate-950"
               }`}
             >
-              <Icon size={19} />
-              {item.label}
+              <span className="flex min-w-0 items-center gap-3">
+                <Icon size={19} />
+                <span className="truncate">{item.label}</span>
+              </span>
+
+              {badgeCount > 0 && (
+                <span
+                  className={`ml-auto rounded-full px-2.5 py-1 text-xs font-black ${
+                    isActive
+                      ? "bg-white text-blue-700"
+                      : "bg-red-500 text-white"
+                  }`}
+                >
+                  {badgeCount > 99 ? "99+" : badgeCount}
+                </span>
+              )}
             </button>
           );
         })}
@@ -1428,7 +1465,7 @@ function SidebarContent({ activeView, setActiveView, profile, user, onLogout }) 
   );
 }
 
-function MobileNav({ activeView, setActiveView }) {
+function MobileNav({ activeView, setActiveView, badgeCounts = {} }) {
   return (
     <div className="mb-6 rounded-3xl bg-white p-3 shadow-sm ring-1 ring-slate-200 lg:hidden">
       <div className="mb-3 flex items-center justify-center rounded-2xl bg-slate-50 p-3 ring-1 ring-slate-200">
@@ -1443,20 +1480,35 @@ function MobileNav({ activeView, setActiveView }) {
         {navigationItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeView === item.id;
+          const badgeCount = Number(badgeCounts[item.id] || 0);
 
           return (
             <button
               key={item.id}
               type="button"
               onClick={() => setActiveView(item.id)}
-              className={`flex items-center justify-center gap-2 rounded-2xl px-3 py-3 text-xs font-black transition ${
+              className={`relative flex items-center justify-center gap-2 rounded-2xl px-3 py-3 text-xs font-black transition ${
                 isActive
                   ? "bg-blue-600 text-white"
                   : "bg-slate-50 text-slate-600"
               }`}
             >
-              <Icon size={16} />
-              {item.label}
+              <span className="flex items-center gap-2">
+                <Icon size={16} />
+                <span>{item.label}</span>
+              </span>
+
+              {badgeCount > 0 && (
+                <span
+                  className={`absolute right-1 top-1 rounded-full px-2 py-0.5 text-[10px] font-black ${
+                    isActive
+                      ? "bg-white text-blue-700"
+                      : "bg-red-500 text-white"
+                  }`}
+                >
+                  {badgeCount > 99 ? "99+" : badgeCount}
+                </span>
+              )}
             </button>
           );
         })}
@@ -1472,11 +1524,12 @@ function OverviewView({
   selectedMonthEntries,
   selectedMonthSummary,
   activeVehicle,
+  paperUploads = [],
   setActiveView,
 }) {
   return (
     <div className="space-y-6">
-      <section className="overflow-hidden rounded-[2rem] bg-slate-950 text-white shadow-xl">
+      <section className="prosper-hero-gradient overflow-hidden rounded-[2rem] text-white shadow-xl">
         <div className="relative p-7 md:p-8">
           <div className="absolute right-0 top-0 h-48 w-48 rounded-full bg-blue-500/20 blur-3xl" />
           <div className="absolute bottom-0 left-20 h-40 w-40 rounded-full bg-cyan-400/10 blur-3xl" />
@@ -1492,9 +1545,7 @@ function OverviewView({
             </h2>
 
             <p className="mt-4 max-w-3xl text-base leading-7 text-slate-300">
-              Review your mileage activity, add entries, upload paper sheets,
-              and message admin from one organized dashboard. Entries update live
-              when you or admin make changes.
+              Manage mileage entries, upload paper forms, check routes, and message admin from one polished dashboard. Updates sync live across worker and admin views.
             </p>
 
             <div className="mt-8 grid gap-4 sm:grid-cols-3">
@@ -1540,8 +1591,8 @@ function OverviewView({
         <KpiCard
           icon={<FileUp size={24} />}
           label="Paper Uploads"
-          value="Soon"
-          helper="AI conversion workflow"
+          value={String(paperUploads.length)}
+          helper="Uploaded paper sheets"
           accent="violet"
         />
       </div>
@@ -1550,7 +1601,8 @@ function OverviewView({
         <section className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <SectionTitle
             eyebrow="Quick Actions"
-            title="What Would You Like To Do?"
+            title="Choose Your Next Step"
+            text="Add mileage, upload a paper sheet, review saved entries, or message admin without leaving the dashboard."
           />
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
@@ -1564,7 +1616,7 @@ function OverviewView({
             <QuickActionCard
               icon={<FileUp size={24} />}
               title="Upload Sheet"
-              text="Upload a paper form for AI conversion."
+              text="Upload a paper form for admin review."
               onClick={() => setActiveView("upload")}
             />
 
@@ -1584,6 +1636,8 @@ function OverviewView({
           </div>
         </section>
 
+        <RouteToolsCard />
+
         <section className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <SectionTitle
             eyebrow="Recent Mileage"
@@ -1600,6 +1654,90 @@ function OverviewView({
         </section>
       </div>
     </div>
+  );
+}
+
+function RouteToolsCard() {
+  const [mapSearch, setMapSearch] = useState("");
+
+  function openMapSearch(event) {
+    event.preventDefault();
+
+    const query = mapSearch.trim() || "Eau Claire WI";
+    const mapsUrl =
+      "https://www.google.com/maps/search/?api=1&query=" +
+      encodeURIComponent(query);
+
+    window.open(mapsUrl, "_blank", "noopener,noreferrer");
+  }
+
+  return (
+    <section className="prosper-glass-card overflow-hidden rounded-[2rem]">
+      <div className="prosper-map-grid relative p-6">
+        <div className="absolute right-0 top-0 h-28 w-28 rounded-full bg-blue-400/20 blur-2xl" />
+        <div className="absolute bottom-0 left-8 h-24 w-24 rounded-full bg-emerald-400/20 blur-2xl" />
+
+        <div className="relative">
+          <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black uppercase tracking-wide text-emerald-700">
+            <MapPin size={14} />
+            Route Tools
+          </div>
+
+          <h3 className="text-xl font-black text-slate-950">
+            Central Wisconsin Map Search
+          </h3>
+
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            Search a property address, city, or destination before starting a
+            trip. Results open in Google Maps in a new tab.
+          </p>
+
+          <form onSubmit={openMapSearch} className="mt-5 flex gap-2">
+            <input
+              type="text"
+              value={mapSearch}
+              onChange={(event) => setMapSearch(event.target.value)}
+              placeholder="Search address, city, or property..."
+              className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+            />
+
+            <button
+              type="submit"
+              className="inline-flex items-center gap-2 rounded-2xl bg-[#2f8fc8] px-4 py-3 text-sm font-black text-white shadow-lg shadow-blue-200 transition hover:bg-[#1f6f9f]"
+            >
+              <Route size={17} />
+              Open
+            </button>
+          </form>
+
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            <MapShortcut label="Eau Claire" query="Eau Claire WI" />
+            <MapShortcut label="Wausau" query="Wausau WI" />
+            <MapShortcut label="Chippewa Falls" query="Chippewa Falls WI" />
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MapShortcut({ label, query }) {
+  function openShortcut() {
+    const mapsUrl =
+      "https://www.google.com/maps/search/?api=1&query=" +
+      encodeURIComponent(query);
+
+    window.open(mapsUrl, "_blank", "noopener,noreferrer");
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={openShortcut}
+      className="rounded-2xl border border-slate-200 bg-white/90 px-3 py-2 text-xs font-black text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+    >
+      {label}
+    </button>
   );
 }
 
@@ -2213,7 +2351,7 @@ function UploadSheetView({
         <SectionTitle
           eyebrow="Paper Sheet Upload"
           title="Upload Mileage Form"
-          text="Upload a photo or PDF of a paper mileage sheet. After uploading, run AI conversion and review the editable draft rows before submitting them as final mileage entries."
+          text="Upload a photo or PDF of a paper mileage sheet. Admin receives the document immediately and can review it manually. AI conversion is optional when credits are available."
         />
 
         <form onSubmit={onUpload} className="mt-6 space-y-5">
@@ -2301,7 +2439,7 @@ function UploadSheetView({
         <SectionTitle
           eyebrow="Upload History"
           title="Your Paper Sheets"
-          text="Run AI conversion, review editable draft rows, then submit the corrected rows as final mileage entries."
+          text="Uploaded files are available to admin right away. Use AI conversion only when available, or let admin review the document manually."
         />
 
         {draftError && <div className="mt-5"><AlertBox type="error" message={draftError} /></div>}
@@ -2830,28 +2968,38 @@ function MessagesView({
 
 function HelpView() {
   return (
-    <section className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
-      <SectionTitle eyebrow="Help" title="Mileage Tracker Help" />
-
-      <div className="mt-6 grid gap-4 md:grid-cols-3">
-        <SmallInfoCard
-          title="Mileage Entries"
-          text="Use the New Mileage Entry section to add daily mileage records."
+    <section className="space-y-6">
+      <div className="prosper-glass-card rounded-[2rem] p-6 shadow-sm ring-1 ring-slate-200">
+        <SectionTitle
+          eyebrow="Help"
+          title="Mileage Tracker Guide"
+          text="Use this portal to add mileage, review saved trips, upload paper forms, check routes, and message admin for support."
         />
 
-        <SmallInfoCard
-          title="Paper Sheets"
-          text="Use Upload Paper Sheet when you want AI to convert a scanned form."
-        />
+        <div className="mt-6 grid gap-4 md:grid-cols-3">
+          <SmallInfoCard
+            title="Mileage Entries"
+            text="Use New Mileage Entry to submit daily trips with date, vehicle, property, odometer readings, miles, and purpose."
+          />
 
-        <SmallInfoCard
-          title="Admin Chat"
-          text="Use Messages to ask admin about corrections or missing details."
-        />
+          <SmallInfoCard
+            title="Paper Sheets"
+            text="Upload photos or PDFs of paper mileage forms. When AI credits are active, Convert With AI creates editable draft rows before final submission."
+          />
+
+          <SmallInfoCard
+            title="Admin Chat"
+            text="Use Messages to ask admin about corrections, missing details, property questions, or paper sheet review."
+          />
+        </div>
       </div>
+
+      <RouteToolsCard />
     </section>
   );
 }
+
+
 
 function MileageTable({
   entries,
