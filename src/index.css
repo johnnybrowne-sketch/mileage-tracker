@@ -738,3 +738,23 @@ button:disabled {
 
 /* PROSPER DESKTOP LOGIN REPAIR END */
 
+
+/* PROSPER HIDE MOBILE INLINE MENU START */
+
+@media (max-width: 768px) {
+  body.prosper-app-page .prosper-mobile-inline-menu-hidden {
+    display: none !important;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-button {
+    display: inline-flex !important;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-button.is-hidden,
+  body.prosper-app-page .prosper-mobile-menu-button.is-drawer-open {
+    display: none !important;
+  }
+}
+
+/* PROSPER HIDE MOBILE INLINE MENU END */
+
