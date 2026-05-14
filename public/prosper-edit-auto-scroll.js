@@ -17,60 +17,103 @@
     return text === "edit" || aria === "edit" || title === "edit";
   }
 
-  function findMileageFormTarget() {
-    const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4, p, span, div"));
+  function getStickyOffset() {
+    const header = document.querySelector("header");
+    const headerHeight = header ? header.getBoundingClientRect().height : 0;
 
-    const headingTarget = headings.find((element) => {
-      const text = normalizeText(element.textContent);
-      return (
-        text === "new mileage entry" ||
-        text.includes("new mileage entry") ||
-        text.includes("add mileage") ||
-        text.includes("mileage entry")
-      );
-    });
+    return Math.max(headerHeight + 10, 70);
+  }
 
-    if (headingTarget) {
-      return headingTarget.closest("section, article, div") || headingTarget;
-    }
+  function isVisible(element) {
+    if (!element) return false;
 
+    const rect = element.getBoundingClientRect();
+
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function findEditableMileageForm() {
     const forms = Array.from(document.querySelectorAll("form"));
 
-    const mileageForm = forms.find((form) => {
+    const mileageForms = forms.filter((form) => {
       const text = normalizeText(form.textContent);
+
       return (
         text.includes("vehicle") &&
         text.includes("property") &&
-        (text.includes("odometer") || text.includes("miles")) &&
-        text.includes("purpose")
+        text.includes("purpose") &&
+        (text.includes("odometer") || text.includes("miles"))
       );
     });
 
-    if (mileageForm) {
-      return mileageForm.closest("section, article, div") || mileageForm;
-    }
+    const editForm =
+      mileageForms.find((form) => {
+        const text = normalizeText(form.textContent);
 
-    return null;
+        return (
+          text.includes("update") ||
+          text.includes("save changes") ||
+          text.includes("cancel") ||
+          text.includes("editing") ||
+          text.includes("edit")
+        );
+      }) || mileageForms[0];
+
+    return editForm || null;
   }
 
-  function scrollToMileageForm() {
-    const target = findMileageFormTarget();
+  function findActualEditableField(form) {
+    if (!form) return null;
+
+    const fields = Array.from(
+      form.querySelectorAll("input, select, textarea")
+    ).filter((field) => {
+      const type = normalizeText(field.getAttribute("type"));
+
+      if (type === "hidden") return false;
+      if (field.disabled) return false;
+      if (!isVisible(field)) return false;
+
+      return true;
+    });
+
+    if (!fields.length) return form;
+
+    const firstField = fields[0];
+    const id = firstField.getAttribute("id");
+
+    if (id && window.CSS && CSS.escape) {
+      const label = form.querySelector('label[for="' + CSS.escape(id) + '"]');
+
+      if (label && isVisible(label)) {
+        return label;
+      }
+    }
+
+    const parentLabel = firstField.closest("label");
+
+    if (parentLabel && isVisible(parentLabel)) {
+      return parentLabel;
+    }
+
+    return firstField;
+  }
+
+  function scrollToActualEditForm() {
+    const form = findEditableMileageForm();
+    const target = findActualEditableField(form);
 
     if (!target) return;
 
-    target.scrollIntoView({
+    const y =
+      target.getBoundingClientRect().top +
+      window.pageYOffset -
+      getStickyOffset();
+
+    window.scrollTo({
+      top: Math.max(y, 0),
       behavior: "smooth",
-      block: "start",
-      inline: "nearest",
     });
-
-    window.setTimeout(() => {
-      const firstInput = target.querySelector("input, select, textarea");
-
-      if (firstInput && window.innerWidth <= 768) {
-        firstInput.focus({ preventScroll: true });
-      }
-    }, 450);
   }
 
   function handleClick(event) {
@@ -80,8 +123,9 @@
 
     if (!looksLikeEditButton(clickable)) return;
 
-    window.setTimeout(scrollToMileageForm, 180);
-    window.setTimeout(scrollToMileageForm, 500);
+    window.setTimeout(scrollToActualEditForm, 180);
+    window.setTimeout(scrollToActualEditForm, 450);
+    window.setTimeout(scrollToActualEditForm, 800);
   }
 
   document.addEventListener("click", handleClick, true);
