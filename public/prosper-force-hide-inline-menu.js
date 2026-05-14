@@ -47,70 +47,138 @@
     "settings"
   ];
 
+  const protectedContentWords = [
+    "welcome",
+    "live dashboard",
+    "total entries",
+    "total miles",
+    "recent mileage",
+    "date",
+    "vehicle",
+    "property",
+    "purpose",
+    "odometer",
+    "download mileage reports",
+    "entries to export",
+    "miles to export",
+    "worker conversations",
+    "chat with admin",
+    "type your message",
+    "send reset link",
+    "sign in",
+    "create account",
+    "reset password",
+    "upload a paper",
+    "select file",
+    "choose file",
+    "admin support",
+    "conversation"
+  ];
+
   function countMatches(text, items) {
     return items.reduce((count, item) => {
       return text.includes(item) ? count + 1 : count;
     }, 0);
   }
 
-  function looksLikeInlineMenu(element) {
-    if (!element || shouldIgnore(element)) return false;
+  function getMenuScore(text) {
+    return Math.max(countMatches(text, workerItems), countMatches(text, adminItems));
+  }
+
+  function getVisibleNavButtonLabels(element) {
+    return Array.from(element.querySelectorAll("button, a"))
+      .filter(isVisible)
+      .map((button) => normalizeText(button.textContent))
+      .filter(Boolean)
+      .filter((text) => text.length <= 48)
+      .filter((text) => {
+        const combined = workerItems.concat(adminItems);
+        return combined.some((item) => text.includes(item));
+      });
+  }
+
+  function looksLikeOnlyMenu(element) {
+    if (!element || shouldIgnore(element) || !isVisible(element)) return false;
 
     const text = normalizeText(element.textContent);
-
-    if (!text) return false;
-
-    const workerScore = countMatches(text, workerItems);
-    const adminScore = countMatches(text, adminItems);
-
-    const score = Math.max(workerScore, adminScore);
+    const score = getMenuScore(text);
 
     if (score < 4) return false;
 
-    const clickableCount = element.querySelectorAll("button, a").length;
+    const labels = getVisibleNavButtonLabels(element);
 
-    if (clickableCount < 4) return false;
+    if (labels.length < 4 || labels.length > 10) return false;
 
-    const badText = [
-      "welcome",
-      "live dashboard",
-      "total entries",
-      "total miles",
-      "recent mileage",
-      "date vehicle property",
-      "download mileage reports",
-      "worker conversations",
-      "chat with admin",
-      "type your message",
-      "sign in",
-      "create account",
-      "reset password"
-    ];
+    /*
+      Do not hide real feature pages.
+      This was the reason the pages were becoming empty.
+    */
+    const hasProtectedContent = protectedContentWords.some((word) => text.includes(word));
 
-    if (badText.some((word) => text.includes(word))) {
-      return false;
-    }
+    if (hasProtectedContent) return false;
+
+    const hasFormOrTable =
+      element.querySelector("form") ||
+      element.querySelector("table") ||
+      element.querySelector("input:not([type='hidden'])") ||
+      element.querySelector("textarea") ||
+      element.querySelector("select");
+
+    if (hasFormOrTable) return false;
 
     return true;
   }
 
-  function findInlineMenuBlocks() {
-    const all = Array.from(document.querySelectorAll("nav, section, article, div"));
-
-    const matches = all.filter((element) => {
-      if (!isVisible(element)) return false;
-      return looksLikeInlineMenu(element);
-    });
+  function findInnermostMenuCandidates() {
+    const all = Array.from(document.querySelectorAll("nav, section, article, div"))
+      .filter(looksLikeOnlyMenu);
 
     /*
-      Keep only the outer useful wrappers.
-      If a parent and child both match, hide the parent.
+      Keep the inner/smaller menu candidate, not a large parent.
+      The previous version kept the outer parent and sometimes hid the actual page.
     */
-    return matches.filter((element) => {
-      return !matches.some((other) => {
-        return other !== element && other.contains(element) && looksLikeInlineMenu(other);
+    return all.filter((element) => {
+      return !all.some((other) => {
+        return other !== element && element.contains(other);
       });
     });
+  }
+
+  function findSafeWrapper(menuElement) {
+    if (!menuElement) return null;
+
+    let target = menuElement;
+    let current = menuElement.parentElement;
+
+    const menuRect = menuElement.getBoundingClientRect();
+
+    while (
+      current &&
+      current !== document.body &&
+      current.id !== "root" &&
+      current.tagName.toLowerCase() !== "main"
+    ) {
+      const text = normalizeText(current.textContent);
+      const currentRect = current.getBoundingClientRect();
+
+      const currentLooksSafe =
+        getMenuScore(text) >= 4 &&
+        !protectedContentWords.some((word) => text.includes(word)) &&
+        !current.querySelector("form") &&
+        !current.querySelector("table") &&
+        !current.querySelector("input:not([type='hidden'])") &&
+        !current.querySelector("textarea") &&
+        !current.querySelector("select") &&
+        currentRect.height <= menuRect.height + 180 &&
+        currentRect.width <= window.innerWidth - 10;
+
+      if (!currentLooksSafe) break;
+
+      target = current;
+      current = current.parentElement;
+    }
+
+    return target;
   }
 
   function hideInlineMenus() {
@@ -120,31 +188,14 @@
 
     if (!isMobile() || !isAppPage()) return;
 
-    const blocks = findInlineMenuBlocks();
+    const candidates = findInnermostMenuCandidates();
 
-    blocks.forEach((block) => {
-      /*
-        The duplicate menu is usually a rounded card/wrapper.
-        Hide the closest card-like wrapper, but never hide the body/root/main.
-      */
-      let target = block;
+    candidates.forEach((candidate) => {
+      const wrapper = findSafeWrapper(candidate);
 
-      const card =
-        block.closest("[class*='rounded']") ||
-        block.closest("section") ||
-        block.closest("article") ||
-        block;
-
-      if (
-        card &&
-        card !== document.body &&
-        card.id !== "root" &&
-        card.tagName.toLowerCase() !== "main"
-      ) {
-        target = card;
+      if (wrapper) {
+        wrapper.setAttribute("data-prosper-inline-menu-hidden", "true");
       }
-
-      target.setAttribute("data-prosper-inline-menu-hidden", "true");
     });
   }
 
@@ -172,5 +223,5 @@
   window.addEventListener("popstate", scheduleHide);
   window.addEventListener("prosper-route-change", scheduleHide);
 
-  window.setInterval(scheduleHide, 800);
+  window.setInterval(scheduleHide, 1000);
 })();
