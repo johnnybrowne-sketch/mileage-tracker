@@ -107,3 +107,583 @@ button:disabled {
     0 0 0 1px rgba(47, 143, 200, 0.08),
     0 22px 55px rgba(15, 23, 42, 0.08);
 }
+
+
+/* PROSPER MOBILE FINAL REPAIR START */
+
+@media (max-width: 768px) {
+  html,
+  body,
+  #root {
+    width: 100% !important;
+    min-height: 100% !important;
+    overflow-x: hidden !important;
+  }
+
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #eef5fb !important;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  #root,
+  #root > div,
+  main {
+    width: 100% !important;
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+  }
+
+  img,
+  svg,
+  video,
+  canvas {
+    max-width: 100% !important;
+  }
+
+  input,
+  select,
+  textarea {
+    max-width: 100% !important;
+    font-size: 16px !important;
+  }
+
+  button,
+  a {
+    touch-action: manipulation;
+  }
+}
+
+/* LOGIN / SIGNUP / RESET MOBILE */
+@media (max-width: 768px) {
+  body.prosper-auth-page {
+    background:
+      radial-gradient(circle at top left, rgba(47, 143, 200, 0.16), transparent 36%),
+      radial-gradient(circle at top right, rgba(111, 179, 68, 0.14), transparent 34%),
+      #eef5fb !important;
+  }
+
+  body.prosper-auth-page .prosper-mobile-menu-button,
+  body.prosper-auth-page .prosper-mobile-menu-overlay,
+  body.prosper-auth-page .prosper-mobile-menu-drawer {
+    display: none !important;
+  }
+
+  body.prosper-auth-page main,
+  body.prosper-auth-page #root > div {
+    width: 100% !important;
+    min-height: 100dvh !important;
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow-x: hidden !important;
+  }
+
+  body.prosper-auth-page .prosper-auth-layout-root {
+    width: 100% !important;
+    max-width: 430px !important;
+    min-height: 100dvh !important;
+    margin: 0 auto !important;
+    padding: 1rem !important;
+
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: flex-start !important;
+    align-items: stretch !important;
+    gap: 0 !important;
+  }
+
+  body.prosper-auth-page .prosper-auth-hidden-panel {
+    display: none !important;
+  }
+
+  body.prosper-auth-page .prosper-auth-form-panel,
+  body.prosper-auth-page .prosper-auth-form-card {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 auto !important;
+  }
+
+  body.prosper-auth-page .prosper-auth-form-card {
+    padding: 1.1rem !important;
+    border-radius: 1.35rem !important;
+    background: rgba(255, 255, 255, 0.98) !important;
+    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.12) !important;
+  }
+
+  body.prosper-auth-page .prosper-mobile-auth-logo {
+    display: flex !important;
+    width: 100% !important;
+    justify-content: center !important;
+    margin: 0 0 1rem !important;
+  }
+
+  body.prosper-auth-page .prosper-mobile-auth-logo img {
+    display: block !important;
+    width: auto !important;
+    max-width: 175px !important;
+    max-height: 86px !important;
+    object-fit: contain !important;
+    padding: 0.6rem !important;
+    border-radius: 1.1rem !important;
+    background: white !important;
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.1) !important;
+  }
+
+  body.prosper-auth-page .prosper-mobile-auth-logo-fallback {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: 70px !important;
+    padding: 0.65rem 1rem !important;
+    border-radius: 1.1rem !important;
+    background: white !important;
+    color: #0b64b0 !important;
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.1) !important;
+    font-size: 1.25rem !important;
+    font-weight: 950 !important;
+    letter-spacing: 0.05em !important;
+    text-align: center !important;
+  }
+
+  body.prosper-auth-page h1,
+  body.prosper-auth-page [class*="text-4xl"],
+  body.prosper-auth-page [class*="text-3xl"] {
+    font-size: 1.55rem !important;
+    line-height: 1.08 !important;
+  }
+
+  body.prosper-auth-page p {
+    font-size: 0.82rem !important;
+    line-height: 1.5 !important;
+  }
+
+  body.prosper-auth-page form {
+    gap: 0.8rem !important;
+  }
+
+  body.prosper-auth-page [class*="h-14"] {
+    min-height: 3.05rem !important;
+    height: 3.05rem !important;
+  }
+
+  body.prosper-auth-page [class*="rounded-2xl"],
+  body.prosper-auth-page [class*="rounded-3xl"] {
+    border-radius: 1rem !important;
+  }
+
+  body.prosper-auth-page [class*="p-8"],
+  body.prosper-auth-page [class*="p-7"],
+  body.prosper-auth-page [class*="p-6"] {
+    padding: 1rem !important;
+  }
+}
+
+/* WORKER / ADMIN MOBILE */
+@media (max-width: 768px) {
+  body.prosper-app-page aside {
+    display: none !important;
+  }
+
+  body.prosper-app-page header {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 50 !important;
+
+    min-height: 4rem !important;
+    padding: 0.65rem 0.75rem 0.65rem 4.35rem !important;
+
+    background: rgba(255, 255, 255, 0.96) !important;
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid #dbe7f3 !important;
+  }
+
+  body.prosper-app-page header img {
+    max-height: 40px !important;
+    width: auto !important;
+  }
+
+  body.prosper-app-page main {
+    padding: 0.7rem !important;
+  }
+
+  body.prosper-app-page section,
+  body.prosper-app-page article {
+    max-width: 100% !important;
+  }
+
+  body.prosper-app-page [class*="max-w-7xl"],
+  body.prosper-app-page [class*="max-w-6xl"],
+  body.prosper-app-page [class*="max-w-5xl"],
+  body.prosper-app-page [class*="max-w-4xl"] {
+    max-width: 100% !important;
+  }
+
+  body.prosper-app-page [class*="grid-cols-["],
+  body.prosper-app-page [class*="grid-cols-2"],
+  body.prosper-app-page [class*="grid-cols-3"],
+  body.prosper-app-page [class*="grid-cols-4"],
+  body.prosper-app-page [class*="lg:grid-cols"],
+  body.prosper-app-page [class*="xl:grid-cols"],
+  body.prosper-app-page [class*="2xl:grid-cols"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  body.prosper-app-page [class*="lg:flex-row"],
+  body.prosper-app-page [class*="xl:flex-row"] {
+    flex-direction: column !important;
+  }
+
+  body.prosper-app-page [class*="gap-8"],
+  body.prosper-app-page [class*="gap-7"],
+  body.prosper-app-page [class*="gap-6"] {
+    gap: 0.85rem !important;
+  }
+
+  body.prosper-app-page [class*="p-8"],
+  body.prosper-app-page [class*="p-7"],
+  body.prosper-app-page [class*="p-6"] {
+    padding: 0.95rem !important;
+  }
+
+  body.prosper-app-page [class*="px-8"],
+  body.prosper-app-page [class*="px-7"],
+  body.prosper-app-page [class*="px-6"],
+  body.prosper-app-page [class*="px-5"] {
+    padding-left: 0.95rem !important;
+    padding-right: 0.95rem !important;
+  }
+
+  body.prosper-app-page [class*="py-8"],
+  body.prosper-app-page [class*="py-7"],
+  body.prosper-app-page [class*="py-6"],
+  body.prosper-app-page [class*="py-5"] {
+    padding-top: 0.95rem !important;
+    padding-bottom: 0.95rem !important;
+  }
+
+  body.prosper-app-page [class*="rounded-[2rem]"],
+  body.prosper-app-page [class*="rounded-[1.75rem]"],
+  body.prosper-app-page [class*="rounded-3xl"] {
+    border-radius: 1.1rem !important;
+  }
+
+  body.prosper-app-page [class*="text-7xl"],
+  body.prosper-app-page [class*="text-6xl"],
+  body.prosper-app-page [class*="text-5xl"] {
+    font-size: clamp(1.75rem, 8.5vw, 2.45rem) !important;
+    line-height: 1.05 !important;
+  }
+
+  body.prosper-app-page [class*="text-4xl"] {
+    font-size: clamp(1.45rem, 7vw, 2rem) !important;
+    line-height: 1.1 !important;
+  }
+
+  body.prosper-app-page [class*="text-3xl"] {
+    font-size: clamp(1.25rem, 6vw, 1.65rem) !important;
+    line-height: 1.12 !important;
+  }
+
+  body.prosper-app-page [class*="min-h-screen"] {
+    min-height: auto !important;
+  }
+
+  body.prosper-app-page .fixed.bottom-5.right-5 {
+    right: 0.65rem !important;
+    bottom: 0.85rem !important;
+  }
+
+  body.prosper-app-page .fixed.bottom-5.right-5 > div {
+    width: calc(100vw - 1rem) !important;
+    max-width: calc(100vw - 1rem) !important;
+    height: min(72dvh, 520px) !important;
+    right: 0 !important;
+  }
+}
+
+/* MOBILE TABLE CARDS */
+@media (max-width: 768px) {
+  body.prosper-app-page div:has(> table),
+  body.prosper-app-page [class*="overflow-y-auto"]:has(table),
+  body.prosper-app-page [class*="overflow-auto"]:has(table),
+  body.prosper-app-page [class*="max-h"]:has(table) {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body.prosper-app-page table {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    border-collapse: separate !important;
+    border-spacing: 0 !important;
+  }
+
+  body.prosper-app-page thead {
+    display: none !important;
+  }
+
+  body.prosper-app-page tbody {
+    display: block !important;
+    width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body.prosper-app-page tr {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 0 0.85rem !important;
+    padding: 0.85rem !important;
+
+    border: 1px solid #dbe7f3 !important;
+    border-radius: 1rem !important;
+    background: #ffffff !important;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06) !important;
+  }
+
+  body.prosper-app-page td {
+    display: flex !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    align-items: flex-start !important;
+    justify-content: space-between !important;
+    gap: 0.8rem !important;
+
+    padding: 0.45rem 0 !important;
+    border: 0 !important;
+    border-bottom: 1px solid #eef2f7 !important;
+
+    color: #0f172a !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    overflow-wrap: anywhere !important;
+    word-break: normal !important;
+
+    font-size: 0.82rem !important;
+    line-height: 1.35 !important;
+  }
+
+  body.prosper-app-page td:last-child {
+    border-bottom: 0 !important;
+    padding-bottom: 0 !important;
+  }
+
+  body.prosper-app-page td::before {
+    content: attr(data-label);
+    flex: 0 0 34%;
+    max-width: 34%;
+    color: #64748b;
+    font-size: 0.67rem;
+    font-weight: 950;
+    letter-spacing: 0.045em;
+    line-height: 1.35;
+    text-transform: uppercase;
+  }
+
+  body.prosper-app-page td:not([data-label])::before,
+  body.prosper-app-page td[data-label=""]::before {
+    display: none;
+  }
+}
+
+/* MOBILE DRAWER */
+.prosper-mobile-menu-button,
+.prosper-mobile-menu-overlay,
+.prosper-mobile-menu-drawer {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  body.prosper-app-page .prosper-mobile-menu-button {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 0.55rem);
+    left: 0.6rem;
+    z-index: 10000;
+
+    display: inline-flex !important;
+    width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+
+    border: 1px solid rgba(203, 213, 225, 0.95);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.98);
+    color: #0f172a;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+    backdrop-filter: blur(16px);
+
+    font-size: 23px;
+    font-weight: 900;
+    cursor: pointer;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-button.is-hidden,
+  body.prosper-app-page .prosper-mobile-menu-button.is-drawer-open {
+    display: none !important;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+
+    display: block !important;
+    opacity: 0;
+    pointer-events: none;
+
+    background: rgba(15, 23, 42, 0.42);
+    backdrop-filter: blur(3px);
+    transition: opacity 180ms ease;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-overlay.is-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 9999;
+
+    display: flex !important;
+    width: min(88vw, 340px);
+    height: 100dvh;
+    flex-direction: column;
+
+    background: #ffffff;
+    box-shadow: 24px 0 70px rgba(15, 23, 42, 0.26);
+    transform: translateX(-104%);
+    transition: transform 220ms ease;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-drawer.is-open {
+    transform: translateX(0);
+  }
+
+  .prosper-mobile-menu-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+
+    padding: calc(env(safe-area-inset-top, 0px) + 1rem) 1rem 1rem;
+    border-bottom: 1px solid #e2e8f0;
+    background: linear-gradient(135deg, #0b2f4f, #1f6f7a);
+    color: white;
+  }
+
+  .prosper-mobile-menu-title {
+    min-width: 0;
+    padding-left: 0 !important;
+  }
+
+  .prosper-mobile-menu-title strong {
+    display: block;
+    font-size: 1rem;
+    font-weight: 950;
+    line-height: 1.2;
+  }
+
+  .prosper-mobile-menu-title span {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    opacity: 0.8;
+    text-transform: uppercase;
+  }
+
+  .prosper-mobile-menu-close {
+    display: inline-flex;
+    width: 40px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+
+    border: 0;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.14);
+    color: white;
+    font-size: 24px;
+    font-weight: 900;
+    cursor: pointer;
+  }
+
+  .prosper-mobile-menu-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.75rem;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .prosper-mobile-menu-item {
+    display: flex;
+    width: 100%;
+    min-height: 54px;
+    align-items: center;
+    gap: 0.8rem;
+
+    margin-bottom: 0.5rem;
+    padding: 0.75rem 0.85rem;
+
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    background: #f8fafc;
+    color: #334155;
+
+    font-size: 0.9rem;
+    font-weight: 850;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .prosper-mobile-menu-item.is-active {
+    border-color: #2563eb;
+    background: #2563eb;
+    color: white;
+    box-shadow: 0 12px 25px rgba(37, 99, 235, 0.22);
+  }
+
+  .prosper-mobile-menu-icon {
+    display: inline-flex;
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 11px;
+    background: rgba(37, 99, 235, 0.09);
+    font-size: 16px;
+  }
+
+  .prosper-mobile-menu-item.is-active .prosper-mobile-menu-icon {
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  .prosper-mobile-menu-footer {
+    padding: 0.75rem 1rem calc(env(safe-area-inset-bottom, 0px) + 1rem);
+    border-top: 1px solid #e2e8f0;
+    color: #64748b;
+    font-size: 0.78rem;
+    font-weight: 750;
+    line-height: 1.5;
+  }
+}
+
+/* PROSPER MOBILE FINAL REPAIR END */
+
