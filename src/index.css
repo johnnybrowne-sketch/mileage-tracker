@@ -687,3 +687,54 @@ button:disabled {
 
 /* PROSPER MOBILE FINAL REPAIR END */
 
+
+/* PROSPER DESKTOP LOGIN REPAIR START */
+
+/*
+  Desktop-only repair:
+  The mobile helper adds .prosper-mobile-auth-logo for phone layout.
+  Hide it on desktop so the login page returns to the proper desktop layout.
+*/
+.prosper-mobile-auth-logo {
+  display: none !important;
+}
+
+@media (min-width: 769px) {
+  body.prosper-auth-page .prosper-mobile-auth-logo,
+  body.prosper-auth-page .prosper-mobile-menu-button,
+  body.prosper-auth-page .prosper-mobile-menu-overlay,
+  body.prosper-auth-page .prosper-mobile-menu-drawer {
+    display: none !important;
+  }
+
+  body.prosper-auth-page img {
+    max-width: 260px;
+    height: auto;
+  }
+
+  body.prosper-auth-page form img,
+  body.prosper-auth-page .prosper-auth-form-card img {
+    max-width: 180px;
+  }
+}
+
+/*
+  Keep the current mobile behavior.
+  This restores the mobile logo only on mobile screens.
+*/
+@media (max-width: 768px) {
+  body.prosper-auth-page .prosper-mobile-auth-logo {
+    display: flex !important;
+  }
+
+  body.prosper-auth-page .prosper-mobile-auth-logo img {
+    display: block !important;
+    width: auto !important;
+    max-width: 175px !important;
+    max-height: 86px !important;
+    object-fit: contain !important;
+  }
+}
+
+/* PROSPER DESKTOP LOGIN REPAIR END */
+
