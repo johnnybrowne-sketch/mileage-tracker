@@ -758,3 +758,31 @@ button:disabled {
 
 /* PROSPER HIDE MOBILE INLINE MENU END */
 
+
+/* PROSPER FORCE HIDE MOBILE INLINE MENU START */
+
+@media (max-width: 768px) {
+  body.prosper-app-page [data-prosper-inline-menu-hidden="true"] {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-button {
+    display: inline-flex !important;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-button.is-hidden,
+  body.prosper-app-page .prosper-mobile-menu-button.is-drawer-open {
+    display: none !important;
+  }
+}
+
+/* PROSPER FORCE HIDE MOBILE INLINE MENU END */
+
