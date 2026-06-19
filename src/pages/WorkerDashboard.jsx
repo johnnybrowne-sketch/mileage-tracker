@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   BadgeCheck,
+  BookOpen,
   Bot,
   CalendarDays,
   Car,
   ClipboardList,
   Download,
+  ExternalLink,
   FileUp,
   Gauge,
   HelpCircle,
@@ -52,6 +54,8 @@ const logoPaths = [
   "/logo.svg",
   "/logo.png",
 ];
+
+const WORKER_MANUAL_URL = "/manuals/mileage-tracker-worker-user-manual.pdf";
 
 const navigationItems = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -1342,6 +1346,7 @@ function AIWorkerHelpBot({ setActiveView }) {
         { label: "Add Mileage", view: "new-entry" },
         { label: "Upload Sheet", view: "upload" },
         { label: "Message Admin", view: "messages" },
+        { label: "Open Manual", url: WORKER_MANUAL_URL },
       ],
     },
   ]);
@@ -1423,7 +1428,21 @@ function AIWorkerHelpBot({ setActiveView }) {
           { label: "Add Mileage", view: "new-entry" },
           { label: "Upload Sheet", view: "upload" },
           { label: "View History", view: "history" },
+          { label: "Open Manual", url: WORKER_MANUAL_URL },
         ],
+      };
+    }
+
+    if (
+      text.includes("manual") ||
+      text.includes("guide") ||
+      text.includes("instructions") ||
+      text.includes("step by step")
+    ) {
+      return {
+        text:
+          "Open the Mileage Tracker User Manual for step-by-step help with mileage entries, paper sheet uploads, history, messages, route tools, and support.",
+        actions: [{ label: "Open Manual", url: WORKER_MANUAL_URL }],
       };
     }
 
@@ -1559,6 +1578,7 @@ function AIWorkerHelpBot({ setActiveView }) {
         { label: "Add Mileage", view: "new-entry" },
         { label: "Upload Sheet", view: "upload" },
         { label: "Message Admin", view: "messages" },
+        { label: "Open Manual", url: WORKER_MANUAL_URL },
       ],
     };
   }
@@ -1587,6 +1607,15 @@ function AIWorkerHelpBot({ setActiveView }) {
   function goToView(view) {
     setActiveView(view);
     setIsOpen(false);
+  }
+
+  function handleBotAction(action) {
+    if (action?.url) {
+      window.open(action.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    goToView(action.view);
   }
 
   return (
@@ -1641,7 +1670,7 @@ function AIWorkerHelpBot({ setActiveView }) {
                           <button
                             key={action.label}
                             type="button"
-                            onClick={() => goToView(action.view)}
+                            onClick={() => handleBotAction(action)}
                             className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700 transition hover:bg-blue-100"
                           >
                             {action.label}
@@ -1989,7 +2018,9 @@ function OverviewView({
             text="Add mileage, upload a paper sheet, review saved entries, or message admin without leaving the dashboard."
           />
 
-          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <ManualOverviewCard />
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <QuickActionCard
               icon={<Plus size={24} />}
               title="Add Mileage"
@@ -2036,6 +2067,39 @@ function OverviewView({
             />
           </div>
         </section>
+      </div>
+    </div>
+  );
+}
+
+function ManualOverviewCard() {
+  return (
+    <div className="mt-6 rounded-3xl border border-blue-100 bg-white p-5 shadow-sm ring-1 ring-blue-50">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+            <BookOpen size={24} />
+          </div>
+
+          <div className="min-w-0">
+            <h3 className="text-lg font-black text-slate-950">User Manual</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-500">
+              Learn how to log mileage, upload paper sheets, review history,
+              message admin, and use the help tools.
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() =>
+            window.open(WORKER_MANUAL_URL, "_blank", "noopener,noreferrer")
+          }
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700"
+        >
+          <ExternalLink size={17} />
+          Open Manual
+        </button>
       </div>
     </div>
   );
@@ -3217,6 +3281,7 @@ function WorkerHelpBot({ setActiveView }) {
         { label: "Add Mileage", view: "new-entry" },
         { label: "Upload Sheet", view: "upload" },
         { label: "Message Admin", view: "messages" },
+        { label: "Open Manual", url: WORKER_MANUAL_URL },
       ],
     },
   ]);
@@ -3230,6 +3295,19 @@ function WorkerHelpBot({ setActiveView }) {
 
   function getBotReply(userText) {
     const text = String(userText || "").toLowerCase();
+
+    if (
+      text.includes("manual") ||
+      text.includes("guide") ||
+      text.includes("instructions") ||
+      text.includes("step by step")
+    ) {
+      return {
+        text:
+          "Open the Mileage Tracker User Manual for step-by-step help with mileage entries, paper sheet uploads, history, messages, route tools, and support.",
+        actions: [{ label: "Open Manual", url: WORKER_MANUAL_URL }],
+      };
+    }
 
     if (
       text.includes("submit") ||
@@ -3324,6 +3402,7 @@ function WorkerHelpBot({ setActiveView }) {
         { label: "Add Mileage", view: "new-entry" },
         { label: "Upload Sheet", view: "upload" },
         { label: "View History", view: "history" },
+        { label: "Open Manual", url: WORKER_MANUAL_URL },
       ],
     };
   }
@@ -3348,6 +3427,15 @@ function WorkerHelpBot({ setActiveView }) {
   function goToView(view) {
     setActiveView(view);
     setIsOpen(false);
+  }
+
+  function handleBotAction(action) {
+    if (action?.url) {
+      window.open(action.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    goToView(action.view);
   }
 
   return (
@@ -3403,7 +3491,7 @@ function WorkerHelpBot({ setActiveView }) {
                           <button
                             key={action.label}
                             type="button"
-                            onClick={() => goToView(action.view)}
+                            onClick={() => handleBotAction(action)}
                             className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700 transition hover:bg-blue-100"
                           >
                             {action.label}
@@ -3623,10 +3711,56 @@ function HelpView() {
             text="Use Messages to ask admin about corrections, missing details, property questions, or paper sheet review."
           />
         </div>
+
+        <ManualHelpPanel />
       </div>
 
       <RouteToolsCard />
     </section>
+  );
+}
+
+function ManualHelpPanel() {
+  return (
+    <div className="mt-6 rounded-[2rem] border border-blue-100 bg-white p-5 shadow-sm ring-1 ring-blue-50 md:p-6">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex gap-4">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+            <BookOpen size={26} />
+          </div>
+
+          <div>
+            <h3 className="text-xl font-black text-slate-950">
+              Mileage Tracker User Manual
+            </h3>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+              This guide explains how to use the worker portal step by step.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <a
+            href={WORKER_MANUAL_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700"
+          >
+            <ExternalLink size={17} />
+            Open User Manual
+          </a>
+
+          <a
+            href={WORKER_MANUAL_URL}
+            download="mileage-tracker-worker-user-manual.pdf"
+            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+          >
+            <Download size={17} />
+            Download Manual
+          </a>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -4531,4 +4665,3 @@ function formatDate(dateValue) {
     year: "numeric",
   });
 }
-
