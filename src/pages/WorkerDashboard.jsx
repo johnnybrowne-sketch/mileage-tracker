@@ -303,6 +303,11 @@ export default function WorkerDashboard() {
     const channel = supabase
       .channel(`worker-dashboard-live-sync-${profile.id}`)
       .on(
+  "postgres_changes",
+  { event: "*", schema: "public", table: "jobber_timesheets" },
+  scheduleRealtimeRefresh
+)
+      .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "mileage_entries" },
         scheduleRealtimeRefresh

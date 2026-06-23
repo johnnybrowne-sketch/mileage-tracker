@@ -616,6 +616,11 @@ export default function AdminDashboard() {
     const channel = supabase
       .channel("admin-dashboard-live-sync")
       .on(
+  "postgres_changes",
+  { event: "*", schema: "public", table: "jobber_timesheets" },
+  scheduleRealtimeRefresh
+)
+      .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "mileage_entries" },
         scheduleRealtimeRefresh
