@@ -1,3 +1,4 @@
+import JobberVisitPicker from "../components/JobberVisitPicker";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -29,6 +30,22 @@ import {
 import { supabase } from "../lib/supabaseClient";
 import { signOutUser } from "../services/authService";
 import { getProfileForUser } from "../services/profileService";
+import { saveWorkerMileageEntry } from "../services/mileageService";
+import { getJobberVisitsForMonth } from "../services/jobberService";
+import {
+  formatTimesheetDuration,
+  getAllJobberTimesheets,
+  getTimesheetDateInputValue,
+  getTimesheetDisplayTitle,
+  getTimesheetMileagePurpose,
+  getTimesheetMileageStatus,
+  getTimesheetMonthKey,
+  getTimesheetPropertyCode,
+  getTimesheetPropertyDisplay,
+  isActiveJob,
+  isTimesheetMileageCompleted,
+  mapTimesheetToMileageJobberFields,
+} from "../services/jobberTimesheetService";
 
 const logoPaths = [
   "/prosper-logo.svg",
@@ -41,6 +58,7 @@ const navigationItems = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "mileage", label: "Mileage Review", icon: ClipboardList },
   { id: "add-entry", label: "Admin Add Entry", icon: Plus },
+  { id: "timesheets", label: "Jobber Timesheets", icon: CalendarDays },
   { id: "workers", label: "Workers", icon: UsersRound },
   { id: "paper-sheets", label: "Paper Sheets", icon: FileUp },
   { id: "reports", label: "Reports", icon: BarChart3 },
@@ -88,6 +106,14 @@ const blankAddForm = {
   status: "saved",
 };
 
+const blankTimesheetMileageForm = {
+  timesheetId: "",
+  vehicleName: "",
+  startOdometer: "",
+  endOdometer: "",
+  purpose: "",
+};
+
 const inputClass =
   "h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100";
 
@@ -105,6 +131,8 @@ export default function AdminDashboard() {
   const [entries, setEntries] = useState([]);
   const [mileageSheets, setMileageSheets] = useState([]);
   const [properties, setProperties] = useState([]);
+  const [jobberVisits, setJobberVisits] = useState([]);
+  const [jobberTimesheets, setJobberTimesheets] = useState([]);
   const [vehicles, setVehicles] = useState([]);
   const [assignments, setAssignments] = useState([]);
 
@@ -113,6 +141,12 @@ export default function AdminDashboard() {
   const [selectedVehicle, setSelectedVehicle] = useState("all");
   const [selectedStatus, setSelectedStatus] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
+  const [timesheetWorkerFilter, setTimesheetWorkerFilter] = useState("all");
+  const [timesheetStatusFilter, setTimesheetStatusFilter] = useState("all");
+  const [timesheetLabelFilter, setTimesheetLabelFilter] = useState("all");
+  const [timesheetSearchTerm, setTimesheetSearchTerm] = useState("");
+  const [timesheetActiveOnly, setTimesheetActiveOnly] = useState(false);
+  const [timesheetNeedsMileageOnly, setTimesheetNeedsMileageOnly] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState("");
@@ -124,9 +158,17 @@ export default function AdminDashboard() {
   const [editSuccess, setEditSuccess] = useState("");
 
   const [addForm, setAddForm] = useState(blankAddForm);
+  const [selectedJobberVisit, setSelectedJobberVisit] = useState(null);
   const [savingAdd, setSavingAdd] = useState(false);
   const [addError, setAddError] = useState("");
   const [addSuccess, setAddSuccess] = useState("");
+  const [editJobberVisit, setEditJobberVisit] = useState(null);
+  const [timesheetMileageForm, setTimesheetMileageForm] = useState(
+    blankTimesheetMileageForm
+  );
+  const [savingTimesheetMileage, setSavingTimesheetMileage] = useState(false);
+  const [timesheetError, setTimesheetError] = useState("");
+  const [timesheetSuccess, setTimesheetSuccess] = useState("");
 
   const [messages, setMessages] = useState([]);
   const [selectedMessageWorkerId, setSelectedMessageWorkerId] = useState("");
@@ -161,8 +203,19 @@ export default function AdminDashboard() {
   }, [workers]);
 
   const monthOptions = useMemo(() => {
-    return getMonthOptionsFromEntries(entries);
-  }, [entries]);
+    const options = getMonthOptionsFromEntries(entries);
+
+    for (const timesheet of jobberTimesheets || []) {
+      const monthKey = getTimesheetMonthKey(timesheet);
+      if (monthKey) options.push(monthKey);
+    }
+
+    if (!options.includes(getCurrentMonthKey())) {
+      options.unshift(getCurrentMonthKey());
+    }
+
+    return Array.from(new Set(options)).sort().reverse();
+  }, [entries, jobberTimesheets]);
 
   const selectedWorker = useMemo(() => {
     if (selectedWorkerId === "all") return null;
@@ -199,6 +252,109 @@ export default function AdminDashboard() {
       assignments,
     }).filter((vehicleName) => vehicleName !== "all");
   }, [addSelectedWorker, workers, vehicles, assignments]);
+
+  const timesheetMap = useMemo(() => {
+    return new Map(
+      (jobberTimesheets || []).map((timesheet) => [String(timesheet.id), timesheet])
+    );
+  }, [jobberTimesheets]);
+
+  const selectedTimesheet = useMemo(() => {
+    if (!timesheetMileageForm.timesheetId) return null;
+
+    return (
+      jobberTimesheets.find(
+        (timesheet) => String(timesheet.id) === String(timesheetMileageForm.timesheetId)
+      ) || null
+    );
+  }, [jobberTimesheets, timesheetMileageForm.timesheetId]);
+
+  const selectedTimesheetWorker = useMemo(() => {
+    if (!selectedTimesheet) return null;
+    return getWorkerForTimesheet(selectedTimesheet, workerMap);
+  }, [selectedTimesheet, workerMap]);
+
+  const timesheetVehicleOptions = useMemo(() => {
+    return getVehicleOptionsForWorker({
+      worker: selectedTimesheetWorker,
+      workers,
+      vehicles,
+      assignments,
+    }).filter((vehicleName) => vehicleName !== "all");
+  }, [selectedTimesheetWorker, workers, vehicles, assignments]);
+
+  const timesheetCalculatedMiles = useMemo(() => {
+    return calculateMilesFromOdometer(
+      timesheetMileageForm.startOdometer,
+      timesheetMileageForm.endOdometer
+    );
+  }, [timesheetMileageForm.startOdometer, timesheetMileageForm.endOdometer]);
+
+  const filteredJobberTimesheets = useMemo(() => {
+    return (jobberTimesheets || []).filter((timesheet) => {
+      const worker = getWorkerForTimesheet(timesheet, workerMap);
+      const monthKey = getTimesheetMonthKey(timesheet);
+      const status = getTimesheetMileageStatus(timesheet);
+      const label = timesheet.label || "Timesheet";
+
+      const matchesMonth =
+        selectedMonth === "all" || monthKey === selectedMonth;
+      const matchesWorker =
+        timesheetWorkerFilter === "all" ||
+        String(worker?.id || "") === String(timesheetWorkerFilter);
+      const matchesStatus =
+        timesheetStatusFilter === "all" || status === timesheetStatusFilter;
+      const matchesLabel =
+        timesheetLabelFilter === "all" || label === timesheetLabelFilter;
+      const matchesActive = !timesheetActiveOnly || isActiveJob(timesheet);
+      const matchesNeedsMileage =
+        !timesheetNeedsMileageOnly || !isTimesheetMileageCompleted(timesheet);
+
+      const searchText = [
+        timesheet.worker_name,
+        timesheet.worker_email,
+        timesheet.label,
+        timesheet.note,
+        timesheet.jobber_job_title,
+        timesheet.jobber_job_number,
+        timesheet.jobber_client_name,
+        timesheet.jobber_property_address,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      const matchesSearch =
+        !timesheetSearchTerm.trim() ||
+        searchText.includes(timesheetSearchTerm.trim().toLowerCase());
+
+      return (
+        matchesMonth &&
+        matchesWorker &&
+        matchesStatus &&
+        matchesLabel &&
+        matchesActive &&
+        matchesNeedsMileage &&
+        matchesSearch
+      );
+    });
+  }, [
+    jobberTimesheets,
+    workerMap,
+    selectedMonth,
+    timesheetWorkerFilter,
+    timesheetStatusFilter,
+    timesheetLabelFilter,
+    timesheetSearchTerm,
+    timesheetActiveOnly,
+    timesheetNeedsMileageOnly,
+  ]);
+
+  const timesheetLabelOptions = useMemo(() => {
+    return Array.from(
+      new Set((jobberTimesheets || []).map((timesheet) => timesheet.label).filter(Boolean))
+    ).sort();
+  }, [jobberTimesheets]);
 
   const driverWorkers = useMemo(() => {
     return workers.filter((worker) => isDriverProfile(worker));
@@ -270,6 +426,7 @@ export default function AdminDashboard() {
   const filteredEntries = useMemo(() => {
     return entries.filter((entry) => {
       const worker = getWorkerForEntry(entry, workerMap);
+      const timesheet = timesheetMap.get(String(entry.jobber_timesheet_id));
       const entryMonth = getMonthKeyFromDate(getEntryDate(entry));
       const entryStatus = getEntryStatus(entry);
 
@@ -294,6 +451,14 @@ export default function AdminDashboard() {
         getEntryVehicle(entry),
         getEntryPropertyCode(entry),
         getEntryPropertyDisplay(entry),
+        entry.jobber_job_title,
+        entry.jobber_job_number,
+        entry.jobber_client_name,
+        entry.jobber_property_address,
+        timesheet?.label,
+        timesheet?.note,
+        timesheet?.start_at,
+        timesheet?.end_at,
         getEntryPurpose(entry),
         getEntryStatus(entry),
         worker?.full_name,
@@ -318,6 +483,7 @@ export default function AdminDashboard() {
   }, [
     entries,
     workerMap,
+    timesheetMap,
     selectedMonth,
     selectedWorkerId,
     selectedVehicle,
@@ -401,6 +567,32 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
+    let isActive = true;
+
+    async function loadJobberVisits() {
+      try {
+        const visits = await getJobberVisitsForMonth(selectedMonth);
+
+        if (isActive) {
+          setJobberVisits(visits);
+        }
+      } catch (error) {
+        console.error(error);
+
+        if (isActive) {
+          setJobberVisits([]);
+        }
+      }
+    }
+
+    loadJobberVisits();
+
+    return () => {
+      isActive = false;
+    };
+  }, [selectedMonth]);
+
+  useEffect(() => {
     if (!adminProfile) return undefined;
 
     let refreshTimer = null;
@@ -472,6 +664,11 @@ export default function AdminDashboard() {
         { event: "*", schema: "public", table: "paper_sheet_draft_entries" },
         scheduleRealtimeRefresh
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "jobber_timesheets" },
+        scheduleRealtimeRefresh
+      )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR") {
           console.warn(
@@ -494,12 +691,16 @@ export default function AdminDashboard() {
     });
 
     if (!stillValid) {
+      // Keep the vehicle filter valid after worker/vehicle options change.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedVehicle("all");
     }
   }, [reviewVehicleOptions, selectedVehicle, selectedWorker]);
 
   useEffect(() => {
     if (!addSelectedWorker) {
+      // Keep the add form aligned with the selected worker.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAddForm((currentForm) => ({
         ...currentForm,
         vehicleName: "",
@@ -516,6 +717,8 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     if (driverWorkers.length === 0) {
+      // Keep the message panel from pointing at a missing worker.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedMessageWorkerId("");
       return;
     }
@@ -606,6 +809,7 @@ export default function AdminDashboard() {
       messagesResult,
       paperUploadsResult,
       paperDraftEntriesResult,
+      jobberTimesheetsResult,
     ] = await Promise.all([
       supabase
         .from("worker_profiles")
@@ -648,6 +852,11 @@ export default function AdminDashboard() {
         .from("paper_sheet_draft_entries")
         .select("*")
         .order("entry_number", { ascending: true }),
+
+      getAllJobberTimesheets().then(
+        (data) => ({ data, error: null }),
+        (error) => ({ data: null, error })
+      ),
     ]);
 
     if (workersResult.error) throw workersResult.error;
@@ -659,6 +868,7 @@ export default function AdminDashboard() {
     if (messagesResult.error) throw messagesResult.error;
     if (paperUploadsResult.error) throw paperUploadsResult.error;
     if (paperDraftEntriesResult.error) throw paperDraftEntriesResult.error;
+    if (jobberTimesheetsResult.error) throw jobberTimesheetsResult.error;
 
     const workerRows = workersResult.data || [];
     const entryRows = entriesResult.data || [];
@@ -673,13 +883,19 @@ export default function AdminDashboard() {
     setMessages(messagesResult.data || []);
     setPaperUploads(paperUploadsResult.data || []);
     setPaperDraftEntries(paperDraftEntriesResult.data || []);
+    setJobberTimesheets(jobberTimesheetsResult.data || []);
     setDataError("");
 
     if (shouldSetMonth) {
-      const availableMonths = getMonthOptionsFromEntries(entryRows);
+      const availableMonths = [
+        ...getMonthOptionsFromEntries(entryRows),
+        ...(jobberTimesheetsResult.data || [])
+          .map(getTimesheetMonthKey)
+          .filter(Boolean),
+      ];
 
       if (availableMonths.length > 0) {
-        setSelectedMonth(availableMonths[0]);
+        setSelectedMonth(Array.from(new Set(availableMonths)).sort().reverse()[0]);
       }
     }
 
@@ -693,19 +909,8 @@ export default function AdminDashboard() {
       messageRows: messagesResult.data || [],
       paperUploadRows: paperUploadsResult.data || [],
       paperDraftEntryRows: paperDraftEntriesResult.data || [],
+      jobberTimesheetRows: jobberTimesheetsResult.data || [],
     };
-  }
-
-  async function refreshEntries() {
-    const { data, error } = await supabase
-      .from("mileage_entries")
-      .select("*")
-      .order("entry_date", { ascending: false });
-
-    if (error) throw error;
-
-    setEntries(data || []);
-    return data || [];
   }
 
   async function refreshMileageSheets() {
@@ -774,6 +979,10 @@ export default function AdminDashboard() {
   }
 
   function updateAddForm(field, value) {
+    if (field === "workerId") {
+      setSelectedJobberVisit(null);
+    }
+
     setAddForm((currentForm) => {
       const nextForm = {
         ...currentForm,
@@ -815,6 +1024,7 @@ export default function AdminDashboard() {
     const worker = getWorkerForEntry(entry, workerMap);
 
     setEditingEntry(entry);
+    setEditJobberVisit(getJobberSelectionFromEntry(entry));
     setEditError("");
     setEditSuccess("");
 
@@ -833,12 +1043,17 @@ export default function AdminDashboard() {
 
   function closeEditEntry() {
     setEditingEntry(null);
+    setEditJobberVisit(null);
     setEditForm(blankEditForm);
     setEditError("");
     setEditSuccess("");
   }
 
   function updateEditForm(field, value) {
+    if (field === "workerId") {
+      setEditJobberVisit(null);
+    }
+
     setEditForm((currentForm) => {
       const nextForm = {
         ...currentForm,
@@ -882,8 +1097,8 @@ export default function AdminDashboard() {
         (property) => property.property_code === addForm.propertyCode
       );
 
-      if (!selectedProperty) {
-        throw new Error("Please select a property from the suggestions.");
+      if (!selectedJobberVisit && !selectedProperty) {
+        throw new Error("Please select a Jobber Visit or Property.");
       }
 
       const sheetId = await ensureMileageSheetId({
@@ -907,6 +1122,7 @@ export default function AdminDashboard() {
         worker: selectedWorkerForAdd,
         form: addForm,
         property: selectedProperty,
+        jobberVisit: selectedJobberVisit,
         sheetId,
       });
 
@@ -920,6 +1136,7 @@ export default function AdminDashboard() {
       setSearchTerm("");
       setAddSuccess("Mileage entry added successfully.");
       setActiveView("mileage");
+      setSelectedJobberVisit(null);
 
       setAddForm({
         ...blankAddForm,
@@ -935,6 +1152,120 @@ export default function AdminDashboard() {
       setAddError(getFriendlySupabaseError(error, "Unable to add mileage entry."));
     } finally {
       setSavingAdd(false);
+    }
+  }
+
+  function openTimesheetMileageForm(timesheet) {
+    const worker = getWorkerForTimesheet(timesheet, workerMap);
+    const vehicleOptions = getVehicleOptionsForWorker({
+      worker,
+      workers,
+      vehicles,
+      assignments,
+    }).filter((vehicleName) => vehicleName !== "all");
+    const defaultVehicleName = vehicleOptions[0] || "";
+    const latestEndOdometer = getLatestEndOdometerForWorkerVehicle({
+      entries,
+      worker,
+      vehicleName: defaultVehicleName,
+      workerMap,
+    });
+
+    setTimesheetMileageForm({
+      ...blankTimesheetMileageForm,
+      timesheetId: timesheet.id,
+      vehicleName: defaultVehicleName,
+      startOdometer: latestEndOdometer ? String(latestEndOdometer) : "",
+      purpose: getTimesheetMileagePurpose(timesheet),
+    });
+    setTimesheetError("");
+    setTimesheetSuccess("");
+  }
+
+  function closeTimesheetMileageForm() {
+    setTimesheetMileageForm(blankTimesheetMileageForm);
+    setTimesheetError("");
+    setTimesheetSuccess("");
+  }
+
+  function updateTimesheetMileageForm(field, value) {
+    setTimesheetMileageForm((currentForm) => {
+      const nextForm = {
+        ...currentForm,
+        [field]: value,
+      };
+
+      if (field === "vehicleName") {
+        const worker = selectedTimesheet
+          ? getWorkerForTimesheet(selectedTimesheet, workerMap)
+          : null;
+        const latestEndOdometer = getLatestEndOdometerForWorkerVehicle({
+          entries,
+          worker,
+          vehicleName: value,
+          workerMap,
+        });
+
+        nextForm.startOdometer = latestEndOdometer ? String(latestEndOdometer) : "";
+        nextForm.endOdometer = "";
+      }
+
+      return nextForm;
+    });
+
+    setTimesheetError("");
+    setTimesheetSuccess("");
+  }
+
+  async function handleCompleteTimesheetMileage(event) {
+    event.preventDefault();
+
+    if (!selectedTimesheet) {
+      setTimesheetError("Please choose a Jobber timesheet.");
+      return;
+    }
+
+    const worker = getWorkerForTimesheet(selectedTimesheet, workerMap);
+
+    if (!worker) {
+      setTimesheetError("No Mileage app worker matches this Jobber worker email.");
+      return;
+    }
+
+    if (!timesheetMileageForm.vehicleName) {
+      setTimesheetError("Please select a vehicle.");
+      return;
+    }
+
+    setSavingTimesheetMileage(true);
+    setTimesheetError("");
+    setTimesheetSuccess("");
+
+    try {
+      const savedEntry = await saveWorkerMileageEntry({
+        profile: worker,
+        entryDate: getTimesheetDateInputValue(selectedTimesheet) || getTodayInputValue(),
+        vehicleName: timesheetMileageForm.vehicleName,
+        propertyCode: getTimesheetPropertyCode(selectedTimesheet),
+        propertyDisplay: getTimesheetPropertyDisplay(selectedTimesheet),
+        startOdometer: timesheetMileageForm.startOdometer,
+        endOdometer: timesheetMileageForm.endOdometer,
+        purpose: timesheetMileageForm.purpose,
+        jobberVisit: mapTimesheetToMileageJobberFields(selectedTimesheet),
+        jobberTimesheetId: selectedTimesheet.id,
+      });
+
+      await refreshAllRealtimeData();
+      setSelectedMonth(getMonthKeyFromDate(savedEntry.entry_date));
+      setTimesheetSuccess("Mileage completed for this Jobber timesheet.");
+      setTimesheetMileageForm(blankTimesheetMileageForm);
+    } catch (error) {
+      console.error(error);
+      setTimesheetError(
+        getFriendlySupabaseError(error, "Unable to complete timesheet mileage.")
+      );
+    } finally {
+      setSavingTimesheetMileage(false);
     }
   }
 
@@ -963,8 +1294,8 @@ export default function AdminDashboard() {
         (property) => property.property_code === editForm.propertyCode
       );
 
-      if (!selectedProperty) {
-        throw new Error("Please select a property from the suggestions.");
+      if (!editJobberVisit && !selectedProperty) {
+        throw new Error("Please select a Jobber Visit or Property.");
       }
 
       const sheetId = await ensureMileageSheetId({
@@ -982,6 +1313,7 @@ export default function AdminDashboard() {
         worker: selectedWorkerForEdit,
         form: editForm,
         property: selectedProperty,
+        jobberVisit: editJobberVisit,
         sheetId,
       });
 
@@ -992,6 +1324,7 @@ export default function AdminDashboard() {
         worker: selectedWorkerForEdit,
         form: editForm,
         property: selectedProperty,
+        jobberVisit: editJobberVisit,
         sheetId,
       });
 
@@ -1027,12 +1360,29 @@ export default function AdminDashboard() {
     if (!confirmed) return;
 
     try {
+      const entryToDelete = entries.find((entry) => String(entry.id) === String(entryId));
+
       const { error } = await supabase
         .from("mileage_entries")
         .delete()
         .eq("id", entryId);
 
       if (error) throw error;
+
+      if (entryToDelete?.jobber_timesheet_id) {
+        const { error: timesheetError } = await supabase
+          .from("jobber_timesheets")
+          .update({
+            mileage_entry_id: null,
+            mileage_vehicle: null,
+            mileage_status: "needs_review",
+            mileage_completed_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", entryToDelete.jobber_timesheet_id);
+
+        if (timesheetError) throw timesheetError;
+      }
 
       await refreshAllRealtimeData();
     } catch (error) {
@@ -1353,6 +1703,7 @@ export default function AdminDashboard() {
                 topWorkers={topWorkers}
                 recentEntries={selectedMonthEntries.slice(0, 8)}
                 workerMap={workerMap}
+                timesheetMap={timesheetMap}
                 setActiveView={setActiveView}
               />
             )}
@@ -1374,6 +1725,7 @@ export default function AdminDashboard() {
                 setSearchTerm={setSearchTerm}
                 workers={workers}
                 workerMap={workerMap}
+                timesheetMap={timesheetMap}
                 onEditEntry={openEditEntry}
                 onDeleteEntry={handleDeleteEntry}
                 editingEntry={editingEntry}
@@ -1386,6 +1738,9 @@ export default function AdminDashboard() {
                 editSuccess={editSuccess}
                 editCalculatedMiles={editCalculatedMiles}
                 properties={properties}
+                jobberVisits={jobberVisits}
+                editJobberVisit={editJobberVisit}
+                setEditJobberVisit={setEditJobberVisit}
                 vehicles={vehicles}
                 assignments={assignments}
               />
@@ -1402,6 +1757,9 @@ export default function AdminDashboard() {
                 addCalculatedMiles={addCalculatedMiles}
                 workers={workers}
                 properties={properties}
+                jobberVisits={jobberVisits}
+                selectedJobberVisit={selectedJobberVisit}
+                setSelectedJobberVisit={setSelectedJobberVisit}
                 vehicleOptions={addVehicleOptions}
               />
             )}
@@ -1415,6 +1773,43 @@ export default function AdminDashboard() {
                 setSelectedWorkerId={handleWorkerFilterChange}
                 setSelectedVehicle={setSelectedVehicle}
                 setActiveView={setActiveView}
+              />
+            )}
+
+            {activeView === "timesheets" && (
+              <AdminTimesheetsView
+                timesheets={filteredJobberTimesheets}
+                allTimesheets={jobberTimesheets}
+                workers={driverWorkers}
+                workerMap={workerMap}
+                selectedMonth={selectedMonth}
+                setSelectedMonth={setSelectedMonth}
+                monthOptions={monthOptions}
+                workerFilter={timesheetWorkerFilter}
+                setWorkerFilter={setTimesheetWorkerFilter}
+                statusFilter={timesheetStatusFilter}
+                setStatusFilter={setTimesheetStatusFilter}
+                labelFilter={timesheetLabelFilter}
+                setLabelFilter={setTimesheetLabelFilter}
+                labelOptions={timesheetLabelOptions}
+                searchTerm={timesheetSearchTerm}
+                setSearchTerm={setTimesheetSearchTerm}
+                activeOnly={timesheetActiveOnly}
+                setActiveOnly={setTimesheetActiveOnly}
+                needsMileageOnly={timesheetNeedsMileageOnly}
+                setNeedsMileageOnly={setTimesheetNeedsMileageOnly}
+                selectedTimesheet={selectedTimesheet}
+                selectedTimesheetWorker={selectedTimesheetWorker}
+                vehicleOptions={timesheetVehicleOptions}
+                mileageForm={timesheetMileageForm}
+                updateMileageForm={updateTimesheetMileageForm}
+                openMileageForm={openTimesheetMileageForm}
+                closeMileageForm={closeTimesheetMileageForm}
+                onSubmitMileage={handleCompleteTimesheetMileage}
+                savingMileage={savingTimesheetMileage}
+                error={timesheetError}
+                success={timesheetSuccess}
+                calculatedMiles={timesheetCalculatedMiles}
               />
             )}
 
@@ -1463,6 +1858,7 @@ export default function AdminDashboard() {
                 workers={workers}
                 workerMap={workerMap}
                 vehicleOptions={reviewVehicleOptions}
+                timesheetMap={timesheetMap}
               />
             )}
 
@@ -1685,6 +2081,7 @@ function OverviewView({
   topWorkers,
   recentEntries,
   workerMap,
+  timesheetMap,
   setActiveView,
 }) {
   return (
@@ -1849,7 +2246,12 @@ function OverviewView({
         />
 
         <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200">
-          <MileageTable entries={recentEntries} workerMap={workerMap} compact />
+          <MileageTable
+            entries={recentEntries}
+            workerMap={workerMap}
+            timesheetMap={timesheetMap}
+            compact
+          />
         </div>
       </section>
     </div>
@@ -1872,6 +2274,7 @@ function MileageReviewView({
   setSearchTerm,
   workers,
   workerMap,
+  timesheetMap,
   onEditEntry,
   onDeleteEntry,
   editingEntry,
@@ -1884,6 +2287,9 @@ function MileageReviewView({
   editSuccess,
   editCalculatedMiles,
   properties,
+  jobberVisits,
+  editJobberVisit,
+  setEditJobberVisit,
   vehicles,
   assignments,
 }) {
@@ -1899,6 +2305,7 @@ function MileageReviewView({
         <DownloadButton
           entries={entries}
           workerMap={workerMap}
+          timesheetMap={timesheetMap}
           fileName={`admin-mileage-${selectedMonth || "all"}.csv`}
           label="Download CSV"
         />
@@ -1932,6 +2339,9 @@ function MileageReviewView({
           editCalculatedMiles={editCalculatedMiles}
           workers={workers}
           properties={properties}
+          jobberVisits={jobberVisits}
+          selectedJobberVisit={editJobberVisit}
+          setSelectedJobberVisit={setEditJobberVisit}
           vehicles={vehicles}
           assignments={assignments}
         />
@@ -1941,6 +2351,7 @@ function MileageReviewView({
         <MileageTable
           entries={entries}
           workerMap={workerMap}
+          timesheetMap={timesheetMap}
           onEditEntry={onEditEntry}
           onDeleteEntry={onDeleteEntry}
         />
@@ -1959,6 +2370,9 @@ function AdminAddEntryView({
   addCalculatedMiles,
   workers,
   properties,
+  jobberVisits,
+  selectedJobberVisit,
+  setSelectedJobberVisit,
   vehicleOptions,
 }) {
   return (
@@ -1980,7 +2394,7 @@ function AdminAddEntryView({
         <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50/70 p-5">
           <h3 className="text-lg font-black text-slate-950">Worker And Trip</h3>
           <p className="mt-1 text-sm leading-6 text-slate-500">
-            Choose the worker, date, vehicle, property, and reason for the trip.
+            Choose the worker, date, vehicle, Jobber job or property, and reason for the trip.
           </p>
 
           <div className="mt-5 grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">
@@ -2044,13 +2458,27 @@ function AdminAddEntryView({
               </select>
             </FormField>
 
-            <PropertyAutocomplete
-              properties={properties}
-              selectedPropertyCode={addForm.propertyCode}
-              onSelect={(propertyCode) =>
-                updateAddForm("propertyCode", propertyCode)
-              }
+            <JobberVisitPicker
+              jobberVisits={jobberVisits}
+              selectedJobberVisit={selectedJobberVisit}
+              setSelectedJobberVisit={setSelectedJobberVisit}
+              updateForm={updateAddForm}
             />
+
+            {selectedJobberVisit ? (
+              <div className="lg:col-span-2 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm font-semibold text-blue-800">
+                Jobber job selected. A normal property is not required for this mileage entry.
+              </div>
+            ) : (
+              <PropertyAutocomplete
+                properties={properties}
+                selectedPropertyCode={addForm.propertyCode}
+                onSelect={(propertyCode) => {
+                  setSelectedJobberVisit(null);
+                  updateAddForm("propertyCode", propertyCode);
+                }}
+              />
+            )}
 
             <div className="lg:col-span-2">
               <FormField label="Purpose">
@@ -2184,7 +2612,7 @@ function FilterBar({
           type="text"
           value={searchTerm}
           onChange={(event) => setSearchTerm(event.target.value)}
-          placeholder="Search worker, property, vehicle, purpose..."
+          placeholder="Search worker, Jobber job, client, property, purpose..."
           className="w-full border-0 bg-transparent px-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400"
         />
       </div>
@@ -2203,6 +2631,9 @@ function EditMileageEntryPanel({
   editCalculatedMiles,
   workers,
   properties,
+  jobberVisits,
+  selectedJobberVisit,
+  setSelectedJobberVisit,
   vehicles,
   assignments,
 }) {
@@ -2297,13 +2728,27 @@ function EditMileageEntryPanel({
             </select>
           </FormField>
 
-          <PropertyAutocomplete
-            properties={properties}
-            selectedPropertyCode={editForm.propertyCode}
-            onSelect={(propertyCode) =>
-              updateEditForm("propertyCode", propertyCode)
-            }
+          <JobberVisitPicker
+            jobberVisits={jobberVisits}
+            selectedJobberVisit={selectedJobberVisit}
+            setSelectedJobberVisit={setSelectedJobberVisit}
+            updateForm={updateEditForm}
           />
+
+          {selectedJobberVisit ? (
+            <div className="lg:col-span-2 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm font-semibold text-blue-800">
+              Jobber job selected. A normal property is not required for this mileage entry.
+            </div>
+          ) : (
+            <PropertyAutocomplete
+              properties={properties}
+              selectedPropertyCode={editForm.propertyCode}
+              onSelect={(propertyCode) => {
+                setSelectedJobberVisit(null);
+                updateEditForm("propertyCode", propertyCode);
+              }}
+            />
+          )}
 
           <div className="lg:col-span-2">
             <FormField label="Purpose">
@@ -2545,8 +2990,12 @@ function ReportsView({
   workers,
   workerMap,
   vehicleOptions,
+  timesheetMap,
 }) {
   const summary = getMileageSummary(filteredEntries);
+  const jobberEntryCount = filteredEntries.filter((entry) => {
+    return hasJobberMileage(entry) || entry.jobber_timesheet_id;
+  }).length;
 
   const selectedWorker = workers.find(
     (worker) => String(worker.id) === String(selectedWorkerId)
@@ -2564,6 +3013,7 @@ function ReportsView({
         <DownloadButton
           entries={filteredEntries}
           workerMap={workerMap}
+          timesheetMap={timesheetMap}
           fileName={buildReportFileName({
             selectedMonth,
             selectedWorker,
@@ -2590,7 +3040,7 @@ function ReportsView({
         workers={workers}
       />
 
-      <div className="mt-6 grid gap-4 md:grid-cols-3">
+      <div className="mt-6 grid gap-4 md:grid-cols-4">
         <KpiCard
           icon={<ClipboardList size={24} />}
           label="Entries To Export"
@@ -2602,7 +3052,14 @@ function ReportsView({
           icon={<Gauge size={24} />}
           label="Miles To Export"
           value={formatMiles(summary.totalMiles)}
-          helper={formatMonthKey(selectedMonth)}
+          helper={`${formatMiles(summary.averageMiles)} average`}
+        />
+
+        <KpiCard
+          icon={<Route size={24} />}
+          label="Jobber Entries"
+          value={jobberEntryCount}
+          helper={`${filteredEntries.length - jobberEntryCount} normal property`}
         />
 
         <KpiCard
@@ -2648,10 +3105,388 @@ function ReportsView({
         <MileageTable
           entries={filteredEntries}
           workerMap={workerMap}
+          timesheetMap={timesheetMap}
           compact
         />
       </div>
     </section>
+  );
+}
+
+function AdminTimesheetsView({
+  timesheets,
+  allTimesheets,
+  workers,
+  workerMap,
+  selectedMonth,
+  setSelectedMonth,
+  monthOptions,
+  workerFilter,
+  setWorkerFilter,
+  statusFilter,
+  setStatusFilter,
+  labelFilter,
+  setLabelFilter,
+  labelOptions,
+  searchTerm,
+  setSearchTerm,
+  activeOnly,
+  setActiveOnly,
+  needsMileageOnly,
+  setNeedsMileageOnly,
+  selectedTimesheet,
+  selectedTimesheetWorker,
+  vehicleOptions,
+  mileageForm,
+  updateMileageForm,
+  openMileageForm,
+  closeMileageForm,
+  onSubmitMileage,
+  savingMileage,
+  error,
+  success,
+  calculatedMiles,
+}) {
+  const completedCount = (allTimesheets || []).filter(isTimesheetMileageCompleted).length;
+  const needsMileageCount = Math.max((allTimesheets || []).length - completedCount, 0);
+
+  return (
+    <section className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200 xl:p-8">
+      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
+        <SectionTitle
+          eyebrow="Jobber Timesheets"
+          title="Review Timesheet Mileage"
+          text="View synced Jobber time records, see which ones still need mileage, and complete mileage for any worker."
+        />
+
+        <div className="inline-flex h-12 items-center gap-2 rounded-2xl bg-blue-50 px-4 text-sm font-black text-blue-700">
+          <CalendarDays size={18} />
+          {(allTimesheets || []).length} Synced
+        </div>
+      </div>
+
+      <div className="mt-6 grid gap-4 md:grid-cols-3">
+        <KpiCard
+          icon={<CalendarDays size={24} />}
+          label="Timesheets"
+          value={(allTimesheets || []).length}
+          helper="All synced records"
+        />
+        <KpiCard
+          icon={<Gauge size={24} />}
+          label="Needs Mileage"
+          value={needsMileageCount}
+          helper="Not completed"
+        />
+        <KpiCard
+          icon={<BadgeCheck size={24} />}
+          label="Completed"
+          value={completedCount}
+          helper="Linked mileage"
+        />
+      </div>
+
+      <div className="mt-6 grid gap-3 xl:grid-cols-[1fr_1fr_1fr_1fr_1.35fr]">
+        <select
+          value={selectedMonth}
+          onChange={(event) => setSelectedMonth(event.target.value)}
+          className={filterClass}
+        >
+          {monthOptions.map((monthKey) => (
+            <option key={monthKey} value={monthKey}>
+              {formatMonthKey(monthKey)}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={workerFilter}
+          onChange={(event) => setWorkerFilter(event.target.value)}
+          className={filterClass}
+        >
+          <option value="all">All Workers</option>
+          {workers.map((worker) => (
+            <option key={worker.id} value={worker.id}>
+              {worker.full_name || worker.email || "Unnamed Worker"}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+          className={filterClass}
+        >
+          <option value="all">All Statuses</option>
+          <option value="needs_review">Needs Review</option>
+          <option value="completed">Completed</option>
+        </select>
+
+        <select
+          value={labelFilter}
+          onChange={(event) => setLabelFilter(event.target.value)}
+          className={filterClass}
+        >
+          <option value="all">All Labels</option>
+          {labelOptions.map((label) => (
+            <option key={label} value={label}>
+              {label}
+            </option>
+          ))}
+        </select>
+
+        <div className="flex h-12 items-center rounded-2xl border border-slate-200 bg-white px-4 shadow-sm transition focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100">
+          <Search size={18} className="text-slate-400" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Search worker, job, client, note..."
+            className="w-full border-0 bg-transparent px-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400"
+          />
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-3">
+        <TogglePill
+          checked={activeOnly}
+          onChange={setActiveOnly}
+          label="Active Job Only"
+        />
+        <TogglePill
+          checked={needsMileageOnly}
+          onChange={setNeedsMileageOnly}
+          label="Needs Mileage Only"
+        />
+      </div>
+
+      {selectedTimesheet && (
+        <form
+          onSubmit={onSubmitMileage}
+          className="mt-6 rounded-[1.5rem] border border-blue-100 bg-blue-50/70 p-5"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <SectionTitle
+              eyebrow="Complete Mileage"
+              title={getTimesheetDisplayTitle(selectedTimesheet)}
+              text={`Worker: ${
+                selectedTimesheetWorker?.full_name ||
+                selectedTimesheet.worker_name ||
+                selectedTimesheet.worker_email ||
+                "Unmatched worker"
+              }`}
+            />
+
+            <button
+              type="button"
+              onClick={closeMileageForm}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50"
+            >
+              <X size={20} />
+            </button>
+          </div>
+
+          {!selectedTimesheetWorker && (
+            <div className="mt-4">
+              <AlertBox
+                type="error"
+                message="No Mileage app worker matches this Jobber worker email."
+              />
+            </div>
+          )}
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-3">
+            <FormField label="Vehicle">
+              <select
+                required
+                value={mileageForm.vehicleName}
+                onChange={(event) => updateMileageForm("vehicleName", event.target.value)}
+                className={inputClass}
+              >
+                <option value="">Select Vehicle</option>
+                {vehicleOptions.map((vehicleName) => (
+                  <option key={vehicleName} value={vehicleName}>
+                    {vehicleName}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+
+            <OdometerInput
+              label="Start Odo"
+              value={mileageForm.startOdometer}
+              onChange={(value) => updateMileageForm("startOdometer", value)}
+              helper="Required before saving."
+            />
+
+            <OdometerInput
+              label="End Odo"
+              value={mileageForm.endOdometer}
+              onChange={(value) => updateMileageForm("endOdometer", value)}
+              helper="Required before saving."
+            />
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_280px]">
+            <FormField label="Purpose / Mileage Note">
+              <textarea
+                rows="4"
+                value={mileageForm.purpose}
+                onChange={(event) => updateMileageForm("purpose", event.target.value)}
+                placeholder="Mileage note for this Jobber timesheet..."
+                className="w-full resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              />
+            </FormField>
+
+            <TotalMilesCard calculatedMiles={calculatedMiles} />
+          </div>
+
+          {error && <div className="mt-4"><AlertBox type="error" message={error} /></div>}
+          {success && <div className="mt-4"><AlertBox type="success" message={success} /></div>}
+
+          <div className="mt-5 flex justify-end border-t border-blue-100 pt-5">
+            <button
+              type="submit"
+              disabled={savingMileage || !selectedTimesheetWorker}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#2f8fc8] px-8 py-3 font-black text-white shadow-lg shadow-blue-200 transition hover:bg-[#1f6f9f] disabled:cursor-not-allowed disabled:opacity-60 md:w-auto"
+            >
+              <Save size={19} />
+              {savingMileage ? "Saving Mileage..." : "Save Timesheet Mileage"}
+            </button>
+          </div>
+        </form>
+      )}
+
+      <div className="mt-6 grid gap-4 xl:grid-cols-2">
+        {timesheets.length > 0 ? (
+          timesheets.map((timesheet) => (
+            <AdminTimesheetCard
+              key={timesheet.id}
+              timesheet={timesheet}
+              worker={getWorkerForTimesheet(timesheet, workerMap)}
+              onAddMileage={openMileageForm}
+            />
+          ))
+        ) : (
+          <div className="xl:col-span-2">
+            <EmptyState
+              title="No Timesheets Found"
+              text="No Jobber timesheets match the current filters."
+            />
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AdminTimesheetCard({ timesheet, worker, onAddMileage }) {
+  const completed = isTimesheetMileageCompleted(timesheet);
+
+  return (
+    <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <TimesheetStatusBadge status={getTimesheetMileageStatus(timesheet)} />
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-600">
+              {timesheet.label || "Timesheet"}
+            </span>
+          </div>
+
+          <h3 className="mt-3 text-lg font-black text-slate-950">
+            {getTimesheetDisplayTitle(timesheet)}
+          </h3>
+          <p className="mt-1 text-sm font-semibold text-slate-500">
+            {worker?.full_name || timesheet.worker_name || "Unknown Worker"} - {formatTimesheetDate(timesheet.start_at)} {formatTimesheetTime(timesheet.start_at)} to {formatTimesheetTime(timesheet.end_at)} - {formatTimesheetDuration(timesheet.duration_minutes)}
+          </p>
+          <p className="mt-1 text-xs font-semibold text-slate-400">
+            {timesheet.worker_email || worker?.email || "No worker email"}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onAddMileage(timesheet)}
+          disabled={completed}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#2f8fc8] px-4 py-2 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-[#1f6f9f] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:shadow-none"
+        >
+          <Route size={16} />
+          {completed ? "Completed" : "Complete Mileage"}
+        </button>
+      </div>
+
+      {timesheet.note && (
+        <p className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm leading-6 text-slate-600">
+          {timesheet.note}
+        </p>
+      )}
+
+      {isActiveJob(timesheet) && (
+        <div className="mt-4 grid gap-3 rounded-2xl bg-blue-50 p-4 text-sm text-blue-950 md:grid-cols-2">
+          <InfoLine label="Job" value={timesheet.jobber_job_title || "Active Job"} />
+          <InfoLine label="Job #" value={timesheet.jobber_job_number || "-"} />
+          <InfoLine label="Client" value={timesheet.jobber_client_name || "No client"} />
+          <InfoLine
+            label="Address"
+            value={timesheet.jobber_property_address || "No address"}
+          />
+          {timesheet.jobber_job_url && (
+            <a
+              href={timesheet.jobber_job_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 font-black text-blue-700 hover:text-blue-900 md:col-span-2"
+            >
+              Open Jobber Job
+            </a>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function TimesheetStatusBadge({ status }) {
+  const cleanStatus = String(status || "needs_review").toLowerCase();
+  const isCompleted = cleanStatus === "completed";
+
+  return (
+    <span
+      className={
+        "inline-flex rounded-full px-3 py-1 text-xs font-black capitalize " +
+        (isCompleted
+          ? "bg-emerald-50 text-emerald-700"
+          : "bg-amber-50 text-amber-700")
+      }
+    >
+      {isCompleted ? "Completed" : "Needs Review"}
+    </span>
+  );
+}
+
+function TogglePill({ checked, onChange, label }) {
+  return (
+    <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 shadow-sm">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="h-4 w-4 accent-[#2f8fc8]"
+      />
+      {label}
+    </label>
+  );
+}
+
+function InfoLine({ label, value }) {
+  return (
+    <div>
+      <p className="text-xs font-black uppercase tracking-wide text-blue-700">
+        {label}
+      </p>
+      <p className="mt-1 font-semibold text-slate-800">{value}</p>
+    </div>
   );
 }
 
@@ -3090,17 +3925,6 @@ function PaperSheetsReviewView({
   );
 }
 
-function ReportMiniCard({ label, value }) {
-  return (
-    <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200">
-      <p className="text-xs font-black uppercase tracking-wide text-slate-500">
-        {label}
-      </p>
-      <p className="mt-1 text-lg font-black text-slate-950">{value}</p>
-    </div>
-  );
-}
-
 function AiStatusBadge({ status }) {
   const cleanStatus = String(status || "not_started").toLowerCase();
 
@@ -3418,6 +4242,7 @@ function SettingsView() {
 function MileageTable({
   entries,
   workerMap,
+  timesheetMap = new Map(),
   compact = false,
   onEditEntry,
   onDeleteEntry,
@@ -3503,9 +4328,16 @@ function MileageTable({
                 </td>
 
                 <td className="px-4 py-4 text-slate-600">
-                  {getEntryPropertyDisplay(entry) ||
+                  {hasJobberMileage(entry) || entry.jobber_timesheet_id ? (
+                    <JobberMileageCell
+                      entry={entry}
+                      timesheet={timesheetMap.get(String(entry.jobber_timesheet_id))}
+                    />
+                  ) : (
+                    getEntryPropertyDisplay(entry) ||
                     getEntryPropertyCode(entry) ||
-                    "—"}
+                    "-"
+                  )}
                 </td>
 
                 <td className="max-w-[280px] break-words px-4 py-4 text-slate-600">
@@ -3513,8 +4345,8 @@ function MileageTable({
                 </td>
 
                 <td className="px-4 py-4 text-slate-600">
-                  {getEntryStartOdometer(entry) || "—"} →{" "}
-                  {getEntryEndOdometer(entry) || "—"}
+                  {getEntryStartOdometer(entry) || "-"}{" -> "}
+                  {getEntryEndOdometer(entry) || "-"}
                 </td>
 
                 <td className="px-4 py-4 font-black text-slate-950">
@@ -3557,6 +4389,41 @@ function MileageTable({
   );
 }
 
+function JobberMileageCell({ entry, timesheet }) {
+  const isTimesheetEntry = Boolean(entry.jobber_timesheet_id);
+  const sourceLabel = isTimesheetEntry ? "Jobber Timesheet" : "Jobber Visit";
+
+  return (
+    <div className="max-w-[360px]">
+      <div className="mb-2 inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-black uppercase tracking-wide text-blue-700">
+        {sourceLabel}
+      </div>
+      <p className="font-black text-slate-950">
+        {entry.jobber_job_title || timesheet?.jobber_job_title || sourceLabel}
+      </p>
+      {(entry.jobber_job_number || timesheet?.jobber_job_number) && (
+        <p className="mt-1 text-xs font-bold text-slate-500">
+          Job #{entry.jobber_job_number || timesheet?.jobber_job_number}
+        </p>
+      )}
+      <p className="mt-2 text-sm font-semibold text-slate-700">
+        {entry.jobber_client_name || timesheet?.jobber_client_name || "No client name"}
+      </p>
+      <p className="mt-1 text-sm leading-5 text-slate-500">
+        {entry.jobber_property_address ||
+          timesheet?.jobber_property_address ||
+          getEntryPropertyDisplay(entry) ||
+          "No address"}
+      </p>
+      {timesheet && (
+        <p className="mt-2 text-xs font-semibold text-slate-500">
+          {formatTimesheetTime(timesheet.start_at)} - {formatTimesheetTime(timesheet.end_at)} - {formatTimesheetDuration(timesheet.duration_minutes)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
@@ -3569,6 +4436,8 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
 
   useEffect(() => {
     if (selectedProperty) {
+      // Keep the visible search text in sync when a saved property code is loaded.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setQuery(getPropertyDisplayLabel(selectedProperty));
     }
 
@@ -3826,7 +4695,7 @@ function QuickActionCard({ icon, title, text, onClick }) {
   );
 }
 
-function DownloadButton({ entries, workerMap, fileName, label }) {
+function DownloadButton({ entries, workerMap, timesheetMap, fileName, label }) {
   return (
     <button
       type="button"
@@ -3834,6 +4703,7 @@ function DownloadButton({ entries, workerMap, fileName, label }) {
         downloadMileageCsv({
           entries,
           workerMap,
+          timesheetMap,
           fileName,
         })
       }
@@ -4091,6 +4961,11 @@ function getWorkerForEntry(entry, workerMap) {
   return null;
 }
 
+function getWorkerForTimesheet(timesheet, workerMap) {
+  if (!timesheet?.worker_email) return null;
+  return workerMap.get(String(timesheet.worker_email).toLowerCase()) || null;
+}
+
 function getEntryDate(entry) {
   return entry.entry_date || entry.date || entry.trip_date || entry.created_at || "";
 }
@@ -4105,6 +4980,69 @@ function getEntryPropertyCode(entry) {
 
 function getEntryPropertyDisplay(entry) {
   return entry.property_display || entry.property_name || entry.property_code || "";
+}
+
+function hasJobberMileage(entry) {
+  return Boolean(
+    entry?.jobber_visit_id ||
+      entry?.jobber_job_id ||
+      entry?.jobber_job_title ||
+      entry?.jobber_client_name ||
+      entry?.jobber_property_address
+  );
+}
+
+function getMileageSourceLabel(entry) {
+  if (entry?.jobber_timesheet_id) return "Jobber Timesheet Entry";
+  if (hasJobberMileage(entry)) return "Jobber Visit Entry";
+  return "Manual Property Entry";
+}
+
+function getJobberSelectionFromEntry(entry) {
+  if (!hasJobberMileage(entry)) {
+    return null;
+  }
+
+  return {
+    jobberVisitId: entry.jobber_visit_id || null,
+    jobberJobId: entry.jobber_job_id || null,
+    jobberClientId: entry.jobber_client_id || null,
+    jobberPropertyId: entry.jobber_property_id || null,
+    jobberJobNumber: entry.jobber_job_number || null,
+    jobberJobTitle: entry.jobber_job_title || null,
+    jobberClientName: entry.jobber_client_name || null,
+    jobberPropertyAddress:
+      entry.jobber_property_address || getEntryPropertyDisplay(entry) || null,
+  };
+}
+
+function getJobberPropertyCode(jobberVisit) {
+  return jobberVisit?.jobberPropertyId || jobberVisit?.jobberVisitId || "";
+}
+
+function getJobberPropertyDisplay(jobberVisit) {
+  return (
+    jobberVisit?.jobberPropertyAddress ||
+    jobberVisit?.jobberJobTitle ||
+    jobberVisit?.jobberClientName ||
+    "Jobber Visit"
+  );
+}
+
+function getMileagePropertyCodeValue({ form, property, jobberVisit }) {
+  if (jobberVisit) {
+    return getJobberPropertyCode(jobberVisit) || form.propertyCode;
+  }
+
+  return property?.property_code || form.propertyCode;
+}
+
+function getMileagePropertyDisplayValue({ form, property, jobberVisit }) {
+  if (jobberVisit) {
+    return getJobberPropertyDisplay(jobberVisit) || form.propertyCode;
+  }
+
+  return getPropertyDisplayLabel(property) || form.propertyCode;
 }
 
 function getEntryStartOdometer(entry) {
@@ -4467,10 +5405,21 @@ function buildCompleteMileageEntryUpdatePayload({
   worker,
   form,
   property,
+  jobberVisit,
   sheetId,
 }) {
   const row = entry || {};
   const payload = { ...(basePayload || {}) };
+  const propertyCodeValue = getMileagePropertyCodeValue({
+    form,
+    property,
+    jobberVisit,
+  });
+  const propertyDisplayValue = getMileagePropertyDisplayValue({
+    form,
+    property,
+    jobberVisit,
+  });
 
   const workerColumns = [
     "worker_id",
@@ -4516,14 +5465,14 @@ function buildCompleteMileageEntryUpdatePayload({
     payload,
     row,
     candidates: ["property_code", "property"],
-    value: property?.property_code || form.propertyCode,
+    value: propertyCodeValue,
   });
 
   setExistingMileageColumns({
     payload,
     row,
     candidates: ["property_display", "property_name"],
-    value: getPropertyDisplayLabel(property) || form.propertyCode,
+    value: propertyDisplayValue,
   });
 
   setExistingMileageColumns({
@@ -4561,11 +5510,23 @@ function buildCompleteMileageEntryUpdatePayload({
     value: form.status || "saved",
   });
 
+  setExistingJobberMileageColumns({ payload, row, jobberVisit });
+
   return payload;
 }
 
 function setExistingMileageColumns({ payload, row, candidates, value }) {
   candidates.forEach((columnName) => {
+    if (hasOwnColumn(row, columnName)) {
+      payload[columnName] = value;
+    }
+  });
+}
+
+function setExistingJobberMileageColumns({ payload, row, jobberVisit }) {
+  const jobberColumns = getJobberPayloadValues(jobberVisit);
+
+  Object.entries(jobberColumns).forEach(([columnName, value]) => {
     if (hasOwnColumn(row, columnName)) {
       payload[columnName] = value;
     }
@@ -4578,12 +5539,23 @@ function buildMileagePayloadForSchema({
   worker,
   form,
   property,
+  jobberVisit,
   sheetId,
 }) {
   const sampleEntry = (entries || []).find(Boolean) || {};
   const hasSampleEntry = Object.keys(sampleEntry).length > 0;
 
   const payload = {};
+  const propertyCodeValue = getMileagePropertyCodeValue({
+    form,
+    property,
+    jobberVisit,
+  });
+  const propertyDisplayValue = getMileagePropertyDisplayValue({
+    form,
+    property,
+    jobberVisit,
+  });
 
   const workerColumn = getWorkerColumn({
     rows: entries,
@@ -4634,7 +5606,7 @@ function buildMileagePayloadForSchema({
     hasSampleEntry,
     candidates: ["property_code", "property"],
     fallback: "property_code",
-    value: property?.property_code || form.propertyCode,
+    value: propertyCodeValue,
   });
 
   setMileagePayloadColumn({
@@ -4643,7 +5615,7 @@ function buildMileagePayloadForSchema({
     hasSampleEntry,
     candidates: ["property_display", "property_name"],
     fallback: "property_display",
-    value: getPropertyDisplayLabel(property) || form.propertyCode,
+    value: propertyDisplayValue,
   });
 
   setMileagePayloadColumn({
@@ -4691,7 +5663,47 @@ function buildMileagePayloadForSchema({
     value: form.status || "saved",
   });
 
+  setJobberMileagePayloadColumns({
+    payload,
+    sampleEntry,
+    hasSampleEntry,
+    jobberVisit,
+  });
+
   return payload;
+}
+
+function setJobberMileagePayloadColumns({
+  payload,
+  sampleEntry,
+  hasSampleEntry,
+  jobberVisit,
+}) {
+  const jobberColumns = getJobberPayloadValues(jobberVisit);
+
+  Object.entries(jobberColumns).forEach(([columnName, value]) => {
+    setMileagePayloadColumn({
+      payload,
+      sampleEntry,
+      hasSampleEntry,
+      candidates: [columnName],
+      fallback: columnName,
+      value,
+    });
+  });
+}
+
+function getJobberPayloadValues(jobberVisit) {
+  return {
+    jobber_visit_id: jobberVisit?.jobberVisitId || null,
+    jobber_job_id: jobberVisit?.jobberJobId || null,
+    jobber_client_id: jobberVisit?.jobberClientId || null,
+    jobber_property_id: jobberVisit?.jobberPropertyId || null,
+    jobber_job_number: jobberVisit?.jobberJobNumber || null,
+    jobber_job_title: jobberVisit?.jobberJobTitle || null,
+    jobber_client_name: jobberVisit?.jobberClientName || null,
+    jobber_property_address: jobberVisit?.jobberPropertyAddress || null,
+  };
 }
 
 function setMileagePayloadColumn({
@@ -5136,8 +6148,21 @@ function formatDate(dateValue) {
     year: "numeric",
   });
 }
+function formatTimesheetDate(dateValue) {
+  return formatDate(dateValue);
+}
 
+function formatTimesheetTime(dateValue) {
+  if (!dateValue) return "-";
 
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 function formatMiles(value) {
   const numberValue = Number(value);
@@ -5195,16 +6220,27 @@ function slugify(value) {
     .replace(/(^-|-$)/g, "");
 }
 
-function downloadMileageCsv({ entries, workerMap, fileName }) {
+function downloadMileageCsv({ entries, workerMap, timesheetMap = new Map(), fileName }) {
   if (!entries || entries.length === 0) return;
 
   const headers = [
     "Date",
+    "Source",
     "Worker",
     "Worker Email",
     "Vehicle",
+    "Timesheet Start",
+    "Timesheet End",
+    "Timesheet Duration",
+    "Timesheet Label",
+    "Timesheet Note",
+    "Jobber Job Title",
+    "Jobber Job Number",
+    "Jobber Client",
+    "Jobber Address",
+    "Jobber Link",
+    "Normal Property",
     "Property Code",
-    "Property",
     "Purpose",
     "Start Odometer",
     "End Odometer",
@@ -5214,14 +6250,26 @@ function downloadMileageCsv({ entries, workerMap, fileName }) {
 
   const rows = entries.map((entry) => {
     const worker = getWorkerForEntry(entry, workerMap);
+    const timesheet = timesheetMap.get(String(entry.jobber_timesheet_id));
 
     return [
       formatDate(getEntryDate(entry)),
+      getMileageSourceLabel(entry),
       worker?.full_name || "",
       worker?.email || "",
       formatVehicleNameForDisplay(getEntryVehicle(entry), worker),
+      timesheet ? formatDate(timesheet.start_at) + " " + formatTimesheetTime(timesheet.start_at) : "",
+      timesheet ? formatDate(timesheet.end_at) + " " + formatTimesheetTime(timesheet.end_at) : "",
+      timesheet ? formatTimesheetDuration(timesheet.duration_minutes) : "",
+      timesheet?.label || "",
+      timesheet?.note || "",
+      entry.jobber_job_title || timesheet?.jobber_job_title || "",
+      entry.jobber_job_number || timesheet?.jobber_job_number || "",
+      entry.jobber_client_name || timesheet?.jobber_client_name || "",
+      entry.jobber_property_address || timesheet?.jobber_property_address || "",
+      timesheet?.jobber_job_url || "",
+      hasJobberMileage(entry) || entry.jobber_timesheet_id ? "" : getEntryPropertyDisplay(entry),
       getEntryPropertyCode(entry),
-      getEntryPropertyDisplay(entry),
       getEntryPurpose(entry),
       getEntryStartOdometer(entry),
       getEntryEndOdometer(entry),

@@ -13,7 +13,6 @@ function parseMileageDate(dateValue) {
   }
 
   const stringValue = String(dateValue).trim();
-
   const dateOnlyMatch = stringValue.match(/^(\d{4})-(\d{2})-(\d{2})$/);
 
   if (dateOnlyMatch) {
@@ -25,32 +24,7 @@ function parseMileageDate(dateValue) {
   }
 
   const timestampDate = new Date(stringValue);
-
-  if (Number.isNaN(timestampDate.getTime())) {
-    return null;
-  }
-
-  return timestampDate;
-}
-
-function toDateInputString(dateValue) {
-  if (!dateValue) return "";
-
-  const stringValue = String(dateValue).trim();
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(stringValue)) {
-    return stringValue;
-  }
-
-  const parsedDate = parseMileageDate(dateValue);
-
-  if (!parsedDate) return "";
-
-  const year = parsedDate.getFullYear();
-  const month = String(parsedDate.getMonth() + 1).padStart(2, "0");
-  const day = String(parsedDate.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
+  return Number.isNaN(timestampDate.getTime()) ? null : timestampDate;
 }
 
 export function getTodayInputValue() {
@@ -62,8 +36,6 @@ export function getTodayInputValue() {
   return `${year}-${month}-${day}`;
 }
 
-
-
 export function getMonthKeyFromDate(dateValue) {
   if (!dateValue) return "";
 
@@ -74,7 +46,6 @@ export function getMonthKeyFromDate(dateValue) {
   }
 
   const parsedDate = parseMileageDate(dateValue);
-
   if (!parsedDate) return "";
 
   const year = parsedDate.getFullYear();
@@ -82,8 +53,6 @@ export function getMonthKeyFromDate(dateValue) {
 
   return `${year}-${month}`;
 }
-
-
 
 export function getMonthStartFromDate(dateValue) {
   const fallback = getTodayInputValue();
@@ -109,13 +78,8 @@ export function calculateMilesFromOdometer(startOdometer, endOdometer) {
   const start = Number(startOdometer);
   const end = Number(endOdometer);
 
-  if (Number.isNaN(start) || Number.isNaN(end)) {
-    return 0;
-  }
-
-  if (end < start) {
-    return 0;
-  }
+  if (Number.isNaN(start) || Number.isNaN(end)) return 0;
+  if (end < start) return 0;
 
   return end - start;
 }
@@ -131,9 +95,7 @@ export function calculateEntryMiles(entry) {
 }
 
 export async function getWorkerMileageEntries(workerId) {
-  if (!workerId) {
-    return [];
-  }
+  if (!workerId) return [];
 
   const { data, error } = await supabase
     .from("mileage_entries")
@@ -153,7 +115,16 @@ export async function getWorkerMileageEntries(workerId) {
       vehicle,
       status,
       created_at,
-      updated_at
+      updated_at,
+      jobber_visit_id,
+      jobber_job_id,
+      jobber_client_id,
+      jobber_property_id,
+      jobber_job_number,
+      jobber_job_title,
+      jobber_client_name,
+      jobber_property_address,
+      jobber_timesheet_id
     `
     )
     .eq("user_id", workerId)
@@ -161,9 +132,7 @@ export async function getWorkerMileageEntries(workerId) {
     .order("created_at", { ascending: false })
     .limit(500);
 
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 
   return data || [];
 }
@@ -182,13 +151,8 @@ export async function ensureMileageSheetForMonth(workerId, entryDate) {
     .eq("month_start", monthStart)
     .maybeSingle();
 
-  if (existingError) {
-    throw existingError;
-  }
-
-  if (existingSheet) {
-    return existingSheet;
-  }
+  if (existingError) throw existingError;
+  if (existingSheet) return existingSheet;
 
   const { data: newSheet, error: insertError } = await supabase
     .from("mileage_sheets")
@@ -210,9 +174,7 @@ export async function ensureMileageSheetForMonth(workerId, entryDate) {
           .eq("month_start", monthStart)
           .single();
 
-      if (duplicateSafeError) {
-        throw duplicateSafeError;
-      }
+      if (duplicateSafeError) throw duplicateSafeError;
 
       return duplicateSafeSheet;
     }
@@ -232,6 +194,8 @@ export async function saveWorkerMileageEntry({
   startOdometer,
   endOdometer,
   purpose,
+  jobberVisit = null,
+  jobberTimesheetId = null,
 }) {
   if (!profile?.id) {
     throw new Error("Worker profile is missing.");
@@ -246,7 +210,7 @@ export async function saveWorkerMileageEntry({
   }
 
   if (!propertyCode) {
-    throw new Error("Property is required.");
+    throw new Error("Please select a Jobber Visit, Jobber Timesheet, or Property.");
   }
 
   if (startOdometer === "" || startOdometer === null || startOdometer === undefined) {
@@ -273,8 +237,20 @@ export async function saveWorkerMileageEntry({
   }
 
   const miles = end - start;
-
   const sheet = await ensureMileageSheetForMonth(profile.id, entryDate);
+
+  const jobberPayload = jobberVisit
+    ? {
+        jobber_visit_id: jobberVisit.jobberVisitId || null,
+        jobber_job_id: jobberVisit.jobberJobId || null,
+        jobber_client_id: jobberVisit.jobberClientId || null,
+        jobber_property_id: jobberVisit.jobberPropertyId || null,
+        jobber_job_number: jobberVisit.jobberJobNumber || null,
+        jobber_job_title: jobberVisit.jobberJobTitle || null,
+        jobber_client_name: jobberVisit.jobberClientName || null,
+        jobber_property_address: jobberVisit.jobberPropertyAddress || null,
+      }
+    : {};
 
   const { data, error } = await supabase
     .from("mileage_entries")
@@ -291,12 +267,27 @@ export async function saveWorkerMileageEntry({
       purpose: purpose?.trim() || null,
       vehicle: vehicleName,
       status: "saved",
+      jobber_timesheet_id: jobberTimesheetId,
+      ...jobberPayload,
     })
     .select("*")
     .single();
 
-  if (error) {
-    throw error;
+  if (error) throw error;
+
+  if (jobberTimesheetId) {
+    const { error: updateTimesheetError } = await supabase
+      .from("jobber_timesheets")
+      .update({
+        mileage_entry_id: data.id,
+        mileage_vehicle: vehicleName,
+        mileage_status: "completed",
+        mileage_completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobberTimesheetId);
+
+    if (updateTimesheetError) throw updateTimesheetError;
   }
 
   return data;
@@ -307,13 +298,34 @@ export async function deleteMileageEntry(entryId) {
     throw new Error("Missing mileage entry id.");
   }
 
+  const { data: existingEntry, error: fetchError } = await supabase
+    .from("mileage_entries")
+    .select("id, jobber_timesheet_id")
+    .eq("id", entryId)
+    .maybeSingle();
+
+  if (fetchError) throw fetchError;
+
   const { error } = await supabase
     .from("mileage_entries")
     .delete()
     .eq("id", entryId);
 
-  if (error) {
-    throw error;
+  if (error) throw error;
+
+  if (existingEntry?.jobber_timesheet_id) {
+    const { error: timesheetError } = await supabase
+      .from("jobber_timesheets")
+      .update({
+        mileage_entry_id: null,
+        mileage_vehicle: null,
+        mileage_status: "needs_review",
+        mileage_completed_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", existingEntry.jobber_timesheet_id);
+
+    if (timesheetError) throw timesheetError;
   }
 }
 

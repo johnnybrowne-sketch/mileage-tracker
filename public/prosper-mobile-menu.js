@@ -314,7 +314,7 @@
       }
 
       return true;
-    } catch (error) {
+    } catch {
       try {
         target.click();
         return true;

@@ -1,3 +1,4 @@
+import JobberVisitPicker from "../components/JobberVisitPicker";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -48,6 +49,24 @@ import {
   saveWorkerMileageEntry,
 } from "../services/mileageService";
 
+import {
+  getJobberVisitsForMonth,
+} from "../services/jobberService";
+import {
+  formatTimesheetDuration,
+  getTimesheetDateInputValue,
+  getTimesheetDisplayTitle,
+  getTimesheetMileagePurpose,
+  getTimesheetMileageStatus,
+  getTimesheetMonthKey,
+  getTimesheetPropertyCode,
+  getTimesheetPropertyDisplay,
+  getWorkerJobberTimesheets,
+  isActiveJob,
+  isTimesheetMileageCompleted,
+  mapTimesheetToMileageJobberFields,
+} from "../services/jobberTimesheetService";
+
 const logoPaths = [
   "/prosper-logo.svg",
   "/prosper-logo.png",
@@ -60,6 +79,7 @@ const WORKER_MANUAL_URL = "/manuals/mileage-tracker-worker-user-manual.pdf";
 const navigationItems = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "new-entry", label: "New Mileage Entry", icon: Plus },
+  { id: "timesheets", label: "Timesheets", icon: CalendarDays },
   { id: "history", label: "Mileage History", icon: History },
   { id: "upload", label: "Upload Paper Sheet", icon: FileUp },
   { id: "messages", label: "Messages", icon: MessageCircle },
@@ -85,6 +105,14 @@ const blankEditForm = {
   purpose: "",
 };
 
+const blankTimesheetMileageForm = {
+  timesheetId: "",
+  vehicleId: "",
+  startOdometer: "",
+  endOdometer: "",
+  purpose: "",
+};
+
 const inputClass =
   "h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100";
 
@@ -99,6 +127,10 @@ export default function WorkerDashboard() {
   const [vehicles, setVehicles] = useState([]);
   const [properties, setProperties] = useState([]);
 
+  const [jobberVisits, setJobberVisits] = useState([]);
+  const [selectedJobberVisit, setSelectedJobberVisit] = useState(null);
+  const [jobberTimesheets, setJobberTimesheets] = useState([]);
+
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthKey());
   const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState("");
@@ -107,6 +139,12 @@ export default function WorkerDashboard() {
   const [savingEntry, setSavingEntry] = useState(false);
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
+  const [timesheetMileageForm, setTimesheetMileageForm] = useState(
+    blankTimesheetMileageForm
+  );
+  const [savingTimesheetMileage, setSavingTimesheetMileage] = useState(false);
+  const [timesheetError, setTimesheetError] = useState("");
+  const [timesheetSuccess, setTimesheetSuccess] = useState("");
 
   const [editingEntry, setEditingEntry] = useState(null);
   const [editForm, setEditForm] = useState(blankEditForm);
@@ -145,15 +183,49 @@ export default function WorkerDashboard() {
     );
   }, [editForm.startOdometer, editForm.endOdometer]);
 
+  const timesheetCalculatedMiles = useMemo(() => {
+    return calculateMilesFromOdometer(
+      timesheetMileageForm.startOdometer,
+      timesheetMileageForm.endOdometer
+    );
+  }, [timesheetMileageForm.startOdometer, timesheetMileageForm.endOdometer]);
+
+  const selectedTimesheet = useMemo(() => {
+    if (!timesheetMileageForm.timesheetId) return null;
+
+    return (
+      jobberTimesheets.find(
+        (timesheet) => String(timesheet.id) === String(timesheetMileageForm.timesheetId)
+      ) || null
+    );
+  }, [jobberTimesheets, timesheetMileageForm.timesheetId]);
+
+  const selectedMonthTimesheets = useMemo(() => {
+    return (jobberTimesheets || []).filter((timesheet) => {
+      return getTimesheetMonthKey(timesheet) === selectedMonth;
+    });
+  }, [jobberTimesheets, selectedMonth]);
+
+  const timesheetMap = useMemo(() => {
+    return new Map(
+      (jobberTimesheets || []).map((timesheet) => [String(timesheet.id), timesheet])
+    );
+  }, [jobberTimesheets]);
+
   const monthOptions = useMemo(() => {
     const options = getMonthOptionsFromEntries(entries);
+
+    for (const timesheet of jobberTimesheets || []) {
+      const monthKey = getTimesheetMonthKey(timesheet);
+      if (monthKey) options.push(monthKey);
+    }
 
     if (!options.includes(getCurrentMonthKey())) {
       options.unshift(getCurrentMonthKey());
     }
 
-    return Array.from(new Set(options));
-  }, [entries]);
+    return Array.from(new Set(options)).sort().reverse();
+  }, [entries, jobberTimesheets]);
 
   const selectedMonthEntries = useMemo(() => {
     return getEntriesForMonth(entries, selectedMonth);
@@ -184,6 +256,32 @@ export default function WorkerDashboard() {
   }, []);
 
   useEffect(() => {
+    let isActive = true;
+
+    async function loadJobberVisits() {
+      try {
+        const visits = await getJobberVisitsForMonth(selectedMonth);
+
+        if (isActive) {
+          setJobberVisits(visits);
+        }
+      } catch (error) {
+        console.error(error);
+
+        if (isActive) {
+          setJobberVisits([]);
+        }
+      }
+    }
+
+    loadJobberVisits();
+
+    return () => {
+      isActive = false;
+    };
+  }, [selectedMonth]);
+
+  useEffect(() => {
     if (!profile?.id) return undefined;
 
     let refreshTimer = null;
@@ -192,7 +290,7 @@ export default function WorkerDashboard() {
       window.clearTimeout(refreshTimer);
 
       refreshTimer = window.setTimeout(() => {
-        refreshAllWorkerData(profile.id).catch((error) => {
+          refreshAllWorkerData(profile.id, profile.email || user?.email || "").catch((error) => {
           console.error(error);
           setDataError(
             error?.message ||
@@ -248,6 +346,11 @@ export default function WorkerDashboard() {
         { event: "*", schema: "public", table: "paper_sheet_draft_entries" },
         scheduleRealtimeRefresh
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "jobber_timesheets" },
+        scheduleRealtimeRefresh
+      )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR") {
           console.warn(
@@ -260,7 +363,7 @@ export default function WorkerDashboard() {
       window.clearTimeout(refreshTimer);
       supabase.removeChannel(channel);
     };
-  }, [profile?.id]);
+  }, [profile?.id, profile?.email, user?.email]);
 
   useEffect(() => {
     if (activeView !== "messages" || !profile?.id) return;
@@ -298,8 +401,11 @@ export default function WorkerDashboard() {
       const {
         workerEntries,
         workerVehicles,
-        propertyList,
-      } = await refreshAllWorkerData(workerProfile.id);
+        workerTimesheets,
+      } = await refreshAllWorkerData(
+        workerProfile.id,
+        workerProfile.email || session.user.email || ""
+      );
 
       if (workerVehicles.length > 0) {
         const defaultVehicle = workerVehicles[0];
@@ -320,10 +426,15 @@ export default function WorkerDashboard() {
         }));
       }
 
-      const availableMonths = getMonthOptionsFromEntries(workerEntries);
+      const availableMonths = [
+        ...getMonthOptionsFromEntries(workerEntries),
+        ...(workerTimesheets || [])
+          .map(getTimesheetMonthKey)
+          .filter(Boolean),
+      ];
 
       if (availableMonths.length > 0) {
-        setSelectedMonth(availableMonths[0]);
+        setSelectedMonth(Array.from(new Set(availableMonths)).sort().reverse()[0]);
       } else {
         setSelectedMonth(getCurrentMonthKey());
       }
@@ -338,7 +449,7 @@ export default function WorkerDashboard() {
     }
   }
 
-  async function refreshAllWorkerData(workerId) {
+  async function refreshAllWorkerData(workerId, workerEmail = "") {
     const [
       workerEntries,
       workerVehicles,
@@ -346,6 +457,7 @@ export default function WorkerDashboard() {
       workerMessages,
       workerPaperUploads,
       workerDraftEntries,
+      workerTimesheets,
     ] = await Promise.all([
       getWorkerMileageEntries(workerId),
       getWorkerVehicles(workerId),
@@ -353,6 +465,7 @@ export default function WorkerDashboard() {
       getWorkerMessages(workerId),
       getWorkerPaperSheetUploads(workerId),
       getWorkerPaperSheetDraftEntries(workerId),
+      getWorkerJobberTimesheets(workerEmail),
     ]);
 
     setEntries(workerEntries);
@@ -361,6 +474,7 @@ export default function WorkerDashboard() {
     setMessages(workerMessages);
     setPaperUploads(workerPaperUploads);
     setPaperDraftEntries(workerDraftEntries);
+    setJobberTimesheets(workerTimesheets);
 
     return {
       workerEntries,
@@ -369,6 +483,7 @@ export default function WorkerDashboard() {
       workerMessages,
       workerPaperUploads,
       workerDraftEntries,
+      workerTimesheets,
     };
   }
 
@@ -438,22 +553,28 @@ export default function WorkerDashboard() {
         (property) => property.property_code === form.propertyCode
       );
 
-      if (!selectedProperty) {
-        throw new Error("Please select a property from the suggestions.");
+      if (!selectedJobberVisit && !selectedProperty) {
+        throw new Error("Please select a Jobber Visit or Property.");
       }
 
       const savedEntry = await saveWorkerMileageEntry({
         profile,
         entryDate: form.entryDate,
         vehicleName: getWorkerVehicleDisplayName(selectedVehicle, profile),
-        propertyCode: selectedProperty?.property_code,
-        propertyDisplay:
-          selectedProperty?.display_label ||
-          selectedProperty?.display_name ||
-          selectedProperty?.property_code,
+        propertyCode: selectedJobberVisit
+          ? selectedJobberVisit.jobberPropertyId || selectedJobberVisit.jobberVisitId
+          : selectedProperty?.property_code,
+        propertyDisplay: selectedJobberVisit
+          ? selectedJobberVisit.jobberPropertyAddress ||
+            selectedJobberVisit.jobberJobTitle ||
+            "Jobber Visit"
+          : selectedProperty?.display_label ||
+            selectedProperty?.display_name ||
+            selectedProperty?.property_code,
         startOdometer: form.startOdometer,
         endOdometer: form.endOdometer,
         purpose: form.purpose,
+        jobberVisit: selectedJobberVisit,
       });
 
       const freshEntries = await refreshEntries(profile.id);
@@ -468,6 +589,7 @@ export default function WorkerDashboard() {
         endOdometer: "",
         purpose: "",
       }));
+      setSelectedJobberVisit(null);
 
       setFormSuccess(
         "Mileage entry saved successfully. The next start odometer has been filled from your last end odometer."
@@ -481,6 +603,125 @@ export default function WorkerDashboard() {
       setFormError(error?.message || "Unable to save mileage entry.");
     } finally {
       setSavingEntry(false);
+    }
+  }
+
+  function openTimesheetMileageForm(timesheet) {
+    const defaultVehicle = vehicles[0] || null;
+    const defaultVehicleName = defaultVehicle
+      ? getWorkerVehicleDisplayName(defaultVehicle, profile)
+      : "";
+    const latestEndOdometer = getLatestEndOdometerForVehicle(
+      entries,
+      defaultVehicleName
+    );
+
+    setTimesheetMileageForm({
+      ...blankTimesheetMileageForm,
+      timesheetId: timesheet.id,
+      vehicleId: defaultVehicle?.id || "",
+      startOdometer: latestEndOdometer ? String(latestEndOdometer) : "",
+      purpose: getTimesheetMileagePurpose(timesheet),
+    });
+    setTimesheetError("");
+    setTimesheetSuccess("");
+  }
+
+  function closeTimesheetMileageForm() {
+    setTimesheetMileageForm(blankTimesheetMileageForm);
+    setTimesheetError("");
+    setTimesheetSuccess("");
+  }
+
+  function updateTimesheetMileageForm(field, value) {
+    setTimesheetMileageForm((currentForm) => {
+      const nextForm = {
+        ...currentForm,
+        [field]: value,
+      };
+
+      if (field === "vehicleId") {
+        const selectedVehicle = vehicles.find((vehicle) => vehicle.id === value);
+        const selectedVehicleName = getWorkerVehicleDisplayName(
+          selectedVehicle,
+          profile
+        );
+        const latestEndOdometer = getLatestEndOdometerForVehicle(
+          entries,
+          selectedVehicleName
+        );
+
+        nextForm.startOdometer = latestEndOdometer ? String(latestEndOdometer) : "";
+        nextForm.endOdometer = "";
+      }
+
+      return nextForm;
+    });
+
+    setTimesheetError("");
+    setTimesheetSuccess("");
+  }
+
+  async function handleCompleteTimesheetMileage(event) {
+    event.preventDefault();
+
+    if (!profile) {
+      setTimesheetError("Worker profile is missing.");
+      return;
+    }
+
+    if (!selectedTimesheet) {
+      setTimesheetError("Please choose a Jobber timesheet.");
+      return;
+    }
+
+    const selectedVehicle = vehicles.find(
+      (vehicle) => vehicle.id === timesheetMileageForm.vehicleId
+    );
+
+    if (!selectedVehicle) {
+      setTimesheetError("Please select a vehicle.");
+      return;
+    }
+
+    setSavingTimesheetMileage(true);
+    setTimesheetError("");
+    setTimesheetSuccess("");
+
+    try {
+      const vehicleName = getWorkerVehicleDisplayName(selectedVehicle, profile);
+
+      const savedEntry = await saveWorkerMileageEntry({
+        profile,
+        entryDate: getTimesheetDateInputValue(selectedTimesheet) || getTodayInputValue(),
+        vehicleName,
+        propertyCode: getTimesheetPropertyCode(selectedTimesheet),
+        propertyDisplay: getTimesheetPropertyDisplay(selectedTimesheet),
+        startOdometer: timesheetMileageForm.startOdometer,
+        endOdometer: timesheetMileageForm.endOdometer,
+        purpose: timesheetMileageForm.purpose,
+        jobberVisit: mapTimesheetToMileageJobberFields(selectedTimesheet),
+        jobberTimesheetId: selectedTimesheet.id,
+      });
+
+      const freshEntries = await refreshEntries(profile.id);
+      const freshTimesheets = await getWorkerJobberTimesheets(
+        profile.email || user?.email || ""
+      );
+
+      setJobberTimesheets(freshTimesheets);
+      setSelectedMonth(getMonthKeyFromDate(savedEntry.entry_date));
+      setTimesheetSuccess("Mileage completed for this Jobber timesheet.");
+      setTimesheetMileageForm(blankTimesheetMileageForm);
+
+      if (freshEntries.length === 0) {
+        setEntries([savedEntry]);
+      }
+    } catch (error) {
+      console.error(error);
+      setTimesheetError(error?.message || "Unable to complete timesheet mileage.");
+    } finally {
+      setSavingTimesheetMileage(false);
     }
   }
 
@@ -584,6 +825,9 @@ export default function WorkerDashboard() {
     try {
       await deleteMileageEntry(entryId);
       await refreshEntries(profile.id);
+      setJobberTimesheets(
+        await getWorkerJobberTimesheets(profile.email || user?.email || "")
+      );
     } catch (error) {
       console.error(error);
       alert(error?.message || "Unable to delete mileage entry.");
@@ -1244,6 +1488,9 @@ export default function WorkerDashboard() {
                 updateForm={updateForm}
                 vehicles={vehicles}
                 properties={properties}
+                jobberVisits={jobberVisits}
+                selectedJobberVisit={selectedJobberVisit}
+                setSelectedJobberVisit={setSelectedJobberVisit}
                 calculatedMiles={calculatedMiles}
                 savingEntry={savingEntry}
                 formError={formError}
@@ -1259,6 +1506,7 @@ export default function WorkerDashboard() {
                 monthOptions={monthOptions}
                 setSelectedMonth={setSelectedMonth}
                 selectedMonthEntries={selectedMonthEntries}
+                timesheetMap={timesheetMap}
                 onDeleteEntry={handleDeleteEntry}
                 onEditEntry={openEditEntry}
                 editingEntry={editingEntry}
@@ -1273,6 +1521,28 @@ export default function WorkerDashboard() {
                 vehicles={vehicles}
                 properties={properties}
                 profile={profile}
+              />
+            )}
+
+            {activeView === "timesheets" && (
+              <WorkerTimesheetsView
+                selectedMonth={selectedMonth}
+                monthOptions={monthOptions}
+                setSelectedMonth={setSelectedMonth}
+                timesheets={selectedMonthTimesheets}
+                allTimesheets={jobberTimesheets}
+                vehicles={vehicles}
+                profile={profile}
+                selectedTimesheet={selectedTimesheet}
+                mileageForm={timesheetMileageForm}
+                updateMileageForm={updateTimesheetMileageForm}
+                openMileageForm={openTimesheetMileageForm}
+                closeMileageForm={closeTimesheetMileageForm}
+                onSubmitMileage={handleCompleteTimesheetMileage}
+                savingMileage={savingTimesheetMileage}
+                error={timesheetError}
+                success={timesheetSuccess}
+                calculatedMiles={timesheetCalculatedMiles}
               />
             )}
 
@@ -2194,6 +2464,9 @@ function NewEntryView({
   updateForm,
   vehicles,
   properties,
+  jobberVisits,
+  selectedJobberVisit,
+  setSelectedJobberVisit,
   calculatedMiles,
   savingEntry,
   formError,
@@ -2252,13 +2525,32 @@ function NewEntryView({
               </select>
             </FormField>
 
-            <PropertyAutocomplete
-              properties={properties}
-              selectedPropertyCode={form.propertyCode}
-              onSelect={(propertyCode) =>
-                updateForm("propertyCode", propertyCode)
-              }
+            <JobberVisitPicker
+              jobberVisits={jobberVisits}
+              selectedJobberVisit={selectedJobberVisit}
+              setSelectedJobberVisit={setSelectedJobberVisit}
+              updateForm={updateForm}
             />
+            {selectedJobberVisit ? (
+              <div className="xl:col-span-2 rounded-2xl border border-blue-100 bg-blue-50 p-4">
+                <p className="text-sm font-black text-blue-950">
+                  Property Assigned From Jobber Visit
+                </p>
+                <p className="mt-1 text-sm font-semibold text-blue-800">
+                  {selectedJobberVisit.jobberPropertyAddress ||
+                    "Jobber property selected"}
+                </p>
+                <p className="mt-1 text-xs font-semibold text-blue-700">
+                  You do not need to select a separate property when using a Jobber Visit.
+                </p>
+              </div>
+            ) : (
+              <PropertyAutocomplete
+                properties={properties}
+                selectedPropertyCode={form.propertyCode}
+                onSelect={(propertyCode) => updateForm("propertyCode", propertyCode)}
+              />
+            )}
 
             <div className="xl:col-span-2">
               <FormField label="Purpose">
@@ -2528,6 +2820,8 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
 
   useEffect(() => {
     if (selectedProperty) {
+      // Keep the visible search text in sync when a saved property code is loaded.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setQuery(getPropertyDisplayLabel(selectedProperty));
     }
 
@@ -2672,11 +2966,280 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
   );
 }
 
+function WorkerTimesheetsView({
+  selectedMonth,
+  monthOptions,
+  setSelectedMonth,
+  timesheets,
+  allTimesheets,
+  vehicles,
+  profile,
+  selectedTimesheet,
+  mileageForm,
+  updateMileageForm,
+  openMileageForm,
+  closeMileageForm,
+  onSubmitMileage,
+  savingMileage,
+  error,
+  success,
+  calculatedMiles,
+}) {
+  const completedCount = (allTimesheets || []).filter(isTimesheetMileageCompleted).length;
+  const needsMileageCount = Math.max((allTimesheets || []).length - completedCount, 0);
+
+  return (
+    <section className="space-y-6">
+      <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200 xl:p-8">
+        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
+          <SectionTitle
+            eyebrow="Jobber Timesheets"
+            title="Complete Mileage From Timesheets"
+            text="Review synced Jobber time records, then add odometer mileage for the timesheets that involved driving."
+          />
+
+          <select
+            value={selectedMonth}
+            onChange={(event) => setSelectedMonth(event.target.value)}
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+          >
+            {monthOptions.map((monthKey) => (
+              <option key={monthKey} value={monthKey}>
+                {formatMonthKey(monthKey)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="mt-6 grid gap-4 md:grid-cols-3">
+          <KpiCard
+            icon={<CalendarDays size={24} />}
+            label="Synced Timesheets"
+            value={(allTimesheets || []).length}
+            helper="From Jobber"
+          />
+          <KpiCard
+            icon={<Gauge size={24} />}
+            label="Needs Mileage"
+            value={needsMileageCount}
+            helper="Not completed yet"
+          />
+          <KpiCard
+            icon={<BadgeCheck size={24} />}
+            label="Completed"
+            value={completedCount}
+            helper="Linked to mileage"
+          />
+        </div>
+
+        {selectedTimesheet && (
+          <form
+            onSubmit={onSubmitMileage}
+            className="mt-6 rounded-[1.5rem] border border-blue-100 bg-blue-50/70 p-5"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <SectionTitle
+                eyebrow="Complete Mileage"
+                title={getTimesheetDisplayTitle(selectedTimesheet)}
+                text={`${formatTimesheetDate(selectedTimesheet.start_at)} ${formatTimesheetTime(
+                  selectedTimesheet.start_at
+                )} - ${formatTimesheetTime(selectedTimesheet.end_at)}`}
+              />
+
+              <button
+                type="button"
+                onClick={closeMileageForm}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-3">
+              <FormField label="Vehicle">
+                <select
+                  required
+                  value={mileageForm.vehicleId}
+                  onChange={(event) => updateMileageForm("vehicleId", event.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">Select Vehicle</option>
+                  {vehicles.map((vehicle) => (
+                    <option key={vehicle.id} value={vehicle.id}>
+                      {getWorkerVehicleDisplayName(vehicle, profile)}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+
+              <OdometerInput
+                label="Start Odo"
+                value={mileageForm.startOdometer}
+                onChange={(value) => updateMileageForm("startOdometer", value)}
+                helper="Required before saving."
+              />
+
+              <OdometerInput
+                label="End Odo"
+                value={mileageForm.endOdometer}
+                onChange={(value) => updateMileageForm("endOdometer", value)}
+                helper="Required before saving."
+              />
+            </div>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_280px]">
+              <FormField label="Purpose / Mileage Note">
+                <textarea
+                  rows="4"
+                  value={mileageForm.purpose}
+                  onChange={(event) => updateMileageForm("purpose", event.target.value)}
+                  placeholder="Mileage note for this Jobber timesheet..."
+                  className="w-full resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                />
+              </FormField>
+
+              <TotalMilesCard calculatedMiles={calculatedMiles} />
+            </div>
+
+            {error && <div className="mt-4"><AlertBox type="error" message={error} /></div>}
+            {success && <div className="mt-4"><AlertBox type="success" message={success} /></div>}
+
+            <div className="mt-5 flex justify-end border-t border-blue-100 pt-5">
+              <button
+                type="submit"
+                disabled={savingMileage}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-8 py-3 font-black text-white shadow-lg shadow-blue-200 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 md:w-auto"
+              >
+                <Save size={19} />
+                {savingMileage ? "Saving Mileage..." : "Save Timesheet Mileage"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        <div className="mt-6 grid gap-4 xl:grid-cols-2">
+          {timesheets.length > 0 ? (
+            timesheets.map((timesheet) => (
+              <TimesheetCard
+                key={timesheet.id}
+                timesheet={timesheet}
+                onAddMileage={openMileageForm}
+              />
+            ))
+          ) : (
+            <div className="xl:col-span-2">
+              <EmptyState
+                title="No Timesheets Found"
+                text="No synced Jobber timesheets were found for this month."
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function TimesheetCard({ timesheet, onAddMileage }) {
+  const completed = isTimesheetMileageCompleted(timesheet);
+
+  return (
+    <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <TimesheetStatusBadge status={getTimesheetMileageStatus(timesheet)} />
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-600">
+              {timesheet.label || "Timesheet"}
+            </span>
+          </div>
+
+          <h3 className="mt-3 text-lg font-black text-slate-950">
+            {getTimesheetDisplayTitle(timesheet)}
+          </h3>
+          <p className="mt-1 text-sm font-semibold text-slate-500">
+            {formatTimesheetDate(timesheet.start_at)} - {formatTimesheetTime(timesheet.start_at)} to {formatTimesheetTime(timesheet.end_at)} - {formatTimesheetDuration(timesheet.duration_minutes)}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onAddMileage(timesheet)}
+          disabled={completed}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:shadow-none"
+        >
+          <Route size={16} />
+          {completed ? "Completed" : "Add Mileage"}
+        </button>
+      </div>
+
+      {timesheet.note && (
+        <p className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm leading-6 text-slate-600">
+          {timesheet.note}
+        </p>
+      )}
+
+      {isActiveJob(timesheet) && (
+        <div className="mt-4 grid gap-3 rounded-2xl bg-blue-50 p-4 text-sm text-blue-950 md:grid-cols-2">
+          <InfoLine label="Job" value={timesheet.jobber_job_title || "Active Job"} />
+          <InfoLine label="Job #" value={timesheet.jobber_job_number || "-"} />
+          <InfoLine label="Client" value={timesheet.jobber_client_name || "No client"} />
+          <InfoLine
+            label="Address"
+            value={timesheet.jobber_property_address || "No address"}
+          />
+          {timesheet.jobber_job_url && (
+            <a
+              href={timesheet.jobber_job_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 font-black text-blue-700 hover:text-blue-900 md:col-span-2"
+            >
+              Open Jobber Job
+              <ExternalLink size={15} />
+            </a>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function TimesheetStatusBadge({ status }) {
+  const cleanStatus = String(status || "needs_review").toLowerCase();
+  const isCompleted = cleanStatus === "completed";
+
+  return (
+    <span
+      className={
+        "inline-flex rounded-full px-3 py-1 text-xs font-black capitalize " +
+        (isCompleted
+          ? "bg-emerald-50 text-emerald-700"
+          : "bg-amber-50 text-amber-700")
+      }
+    >
+      {isCompleted ? "Completed" : "Needs Review"}
+    </span>
+  );
+}
+
+function InfoLine({ label, value }) {
+  return (
+    <div>
+      <p className="text-xs font-black uppercase tracking-wide text-blue-700">
+        {label}
+      </p>
+      <p className="mt-1 font-semibold text-slate-800">{value}</p>
+    </div>
+  );
+}
+
 function HistoryView({
   selectedMonth,
   monthOptions,
   setSelectedMonth,
   selectedMonthEntries,
+  timesheetMap,
   onDeleteEntry,
   onEditEntry,
   editingEntry,
@@ -2720,7 +3283,8 @@ function HistoryView({
               downloadMileageHistoryCsv(
                 selectedMonthEntries,
                 selectedMonth,
-                profile
+                profile,
+                timesheetMap
               )
             }
             disabled={!selectedMonthEntries || selectedMonthEntries.length === 0}
@@ -2751,6 +3315,7 @@ function HistoryView({
       <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200">
         <MileageTable
           entries={selectedMonthEntries}
+          timesheetMap={timesheetMap}
           onDeleteEntry={onDeleteEntry}
           onEditEntry={onEditEntry}
           profile={profile}
@@ -3266,9 +3831,8 @@ function AiStatusBadge({ status }) {
     </span>
   );
 }
-
-
-
+// Legacy helper kept for reference while the AIWorkerHelpBot is the active help UI.
+// eslint-disable-next-line no-unused-vars
 function WorkerHelpBot({ setActiveView }) {
   const [isOpen, setIsOpen] = useState(false);
   const [draft, setDraft] = useState("");
@@ -3573,12 +4137,6 @@ function MessagesView({
     });
   }, [messages]);
 
-  const unreadAdminCount = useMemo(() => {
-    return sortedMessages.filter((message) => {
-      return message.sender_role === "admin" && message.is_read === false;
-    }).length;
-  }, [sortedMessages]);
-
   return (
     <section className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
       <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
@@ -3768,6 +4326,7 @@ function ManualHelpPanel() {
 
 function MileageTable({
   entries,
+  timesheetMap = new Map(),
   compact = false,
   onDeleteEntry,
   onEditEntry,
@@ -3843,7 +4402,14 @@ function MileageTable({
               </td>
 
               <td className="px-4 py-4 text-slate-600">
-                {entry.property_display || entry.property_code || "—"}
+                {hasJobberMileage(entry) || entry.jobber_timesheet_id ? (
+                  <JobberMileageCell
+                    entry={entry}
+                    timesheet={timesheetMap.get(String(entry.jobber_timesheet_id))}
+                  />
+                ) : (
+                  entry.property_display || entry.property_code || "—"
+                )}
               </td>
 
               <td className="max-w-[340px] px-4 py-4 text-slate-600">
@@ -3889,6 +4455,41 @@ function MileageTable({
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function JobberMileageCell({ entry, timesheet }) {
+  const isTimesheetEntry = Boolean(entry.jobber_timesheet_id);
+  const sourceLabel = isTimesheetEntry ? "Jobber Timesheet" : "Jobber Visit";
+
+  return (
+    <div className="max-w-[360px]">
+      <div className="mb-2 inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-black uppercase tracking-wide text-blue-700">
+        {sourceLabel}
+      </div>
+      <p className="font-black text-slate-950">
+        {entry.jobber_job_title || timesheet?.jobber_job_title || sourceLabel}
+      </p>
+      {(entry.jobber_job_number || timesheet?.jobber_job_number) && (
+        <p className="mt-1 text-xs font-bold text-slate-500">
+          Job #{entry.jobber_job_number || timesheet?.jobber_job_number}
+        </p>
+      )}
+      <p className="mt-2 text-sm font-semibold text-slate-700">
+        {entry.jobber_client_name || timesheet?.jobber_client_name || "No client name"}
+      </p>
+      <p className="mt-1 text-sm leading-5 text-slate-500">
+        {entry.jobber_property_address ||
+          timesheet?.jobber_property_address ||
+          entry.property_display ||
+          "No address"}
+      </p>
+      {timesheet && (
+        <p className="mt-2 text-xs font-semibold text-slate-500">
+          {formatTimesheetTime(timesheet.start_at)} - {formatTimesheetTime(timesheet.end_at)} - {formatTimesheetDuration(timesheet.duration_minutes)}
+        </p>
+      )}
     </div>
   );
 }
@@ -4001,6 +4602,18 @@ function AlertBox({ type, message }) {
       : "rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700";
 
   return <div className={className}>{message}</div>;
+}
+
+function EmptyState({ title, text }) {
+  return (
+    <div className="mx-auto flex max-w-sm flex-col items-center py-10 text-center">
+      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+        <Route size={28} />
+      </div>
+      <h3 className="mt-4 text-lg font-black text-slate-950">{title}</h3>
+      <p className="mt-2 text-sm leading-6 text-slate-500">{text}</p>
+    </div>
+  );
 }
 
 function SmallInfoCard({ title, text }) {
@@ -4490,6 +5103,22 @@ function getEntryPropertyDisplay(entry) {
   );
 }
 
+function hasJobberMileage(entry) {
+  return Boolean(
+    entry?.jobber_visit_id ||
+      entry?.jobber_job_id ||
+      entry?.jobber_job_title ||
+      entry?.jobber_client_name ||
+      entry?.jobber_property_address
+  );
+}
+
+function getMileageSourceLabel(entry) {
+  if (entry?.jobber_timesheet_id) return "Jobber Timesheet Entry";
+  if (hasJobberMileage(entry)) return "Jobber Visit Entry";
+  return "Manual Property Entry";
+}
+
 function getEntryStartOdometer(entry) {
   return entry?.start_odometer ?? entry?.starting_odometer ?? entry?.start_odo ?? "";
 }
@@ -4523,16 +5152,27 @@ function getEntryMiles(entry) {
   return 0;
 }
 
-function downloadMileageHistoryCsv(entries, selectedMonth, profile) {
+function downloadMileageHistoryCsv(entries, selectedMonth, profile, timesheetMap = new Map()) {
   if (!entries || entries.length === 0) {
     return;
   }
 
   const headers = [
     "Date",
+    "Source",
     "Vehicle",
+    "Timesheet Start",
+    "Timesheet End",
+    "Timesheet Duration",
+    "Timesheet Label",
+    "Timesheet Note",
+    "Jobber Job Title",
+    "Jobber Job Number",
+    "Jobber Client",
+    "Jobber Address",
+    "Jobber Link",
+    "Normal Property",
     "Property Code",
-    "Property",
     "Purpose",
     "Start Odometer",
     "End Odometer",
@@ -4540,17 +5180,32 @@ function downloadMileageHistoryCsv(entries, selectedMonth, profile) {
     "Status",
   ];
 
-  const rows = entries.map((entry) => [
-    formatDate(getEntryDate(entry)),
-    formatVehicleNameForDisplay(getEntryVehicle(entry), profile),
-    getEntryPropertyCode(entry),
-    getEntryPropertyDisplay(entry),
-    getEntryPurpose(entry),
-    getEntryStartOdometer(entry),
-    getEntryEndOdometer(entry),
-    getEntryMiles(entry),
-    getEntryStatus(entry),
-  ]);
+  const rows = entries.map((entry) => {
+    const timesheet = timesheetMap.get(String(entry.jobber_timesheet_id));
+
+    return [
+      formatDate(getEntryDate(entry)),
+      getMileageSourceLabel(entry),
+      formatVehicleNameForDisplay(getEntryVehicle(entry), profile),
+      timesheet ? formatDate(timesheet.start_at) + " " + formatTimesheetTime(timesheet.start_at) : "",
+      timesheet ? formatDate(timesheet.end_at) + " " + formatTimesheetTime(timesheet.end_at) : "",
+      timesheet ? formatTimesheetDuration(timesheet.duration_minutes) : "",
+      timesheet?.label || "",
+      timesheet?.note || "",
+      entry.jobber_job_title || timesheet?.jobber_job_title || "",
+      entry.jobber_job_number || timesheet?.jobber_job_number || "",
+      entry.jobber_client_name || timesheet?.jobber_client_name || "",
+      entry.jobber_property_address || timesheet?.jobber_property_address || "",
+      timesheet?.jobber_job_url || "",
+      hasJobberMileage(entry) || entry.jobber_timesheet_id ? "" : getEntryPropertyDisplay(entry),
+      getEntryPropertyCode(entry),
+      getEntryPurpose(entry),
+      getEntryStartOdometer(entry),
+      getEntryEndOdometer(entry),
+      getEntryMiles(entry),
+      getEntryStatus(entry),
+    ];
+  });
 
   const csvContent = [headers, ...rows]
     .map((row) => row.map(escapeCsvValue).join(","))
@@ -4663,5 +5318,21 @@ function formatDate(dateValue) {
     month: "short",
     day: "numeric",
     year: "numeric",
+  });
+}
+
+function formatTimesheetDate(dateValue) {
+  return formatDate(dateValue);
+}
+
+function formatTimesheetTime(dateValue) {
+  if (!dateValue) return "-";
+
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
   });
 }
