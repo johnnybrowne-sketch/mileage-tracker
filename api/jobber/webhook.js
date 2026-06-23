@@ -116,7 +116,17 @@ async function callJobber(query, variables = {}, retry = true) {
     body: JSON.stringify({ query, variables }),
   });
 
-  const json = await response.json();
+  const text = await response.text();
+
+console.log("JOBBER RAW RESPONSE:", text);
+
+let json = {};
+
+try {
+  json = JSON.parse(text);
+} catch {
+  throw new Error(`Jobber returned non-JSON response: ${text}`);
+}
   const jsonText = JSON.stringify(json || {}).toLowerCase();
 
   const authError =
