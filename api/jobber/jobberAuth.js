@@ -10,6 +10,30 @@ export function getRequiredEnv(name) {
   return value;
 }
 
+async function parseJobberTokenResponse(response) {
+  const text = await response.text();
+
+  let json = {};
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = { raw: text };
+  }
+
+  if (!response.ok) {
+    console.error("Jobber token response failed:", json);
+    throw new Error(
+      json.error_description ||
+        json.error ||
+        json.message ||
+        json.raw ||
+        "Jobber token request failed"
+    );
+  }
+
+  return json;
+}
+
 export async function exchangeCodeForTokens(code) {
   const body = new URLSearchParams({
     grant_type: "authorization_code",
@@ -27,14 +51,7 @@ export async function exchangeCodeForTokens(code) {
     body,
   });
 
-  const json = await response.json();
-
-  if (!response.ok) {
-    console.error("Jobber token exchange failed:", json);
-    throw new Error("Jobber token exchange failed");
-  }
-
-  return json;
+  return parseJobberTokenResponse(response);
 }
 
 export async function refreshJobberToken(refreshToken) {
@@ -53,12 +70,5 @@ export async function refreshJobberToken(refreshToken) {
     body,
   });
 
-  const json = await response.json();
-
-  if (!response.ok) {
-    console.error("Jobber token refresh failed:", json);
-    throw new Error("Jobber token refresh failed");
-  }
-
-  return json;
+  return parseJobberTokenResponse(response);
 }
