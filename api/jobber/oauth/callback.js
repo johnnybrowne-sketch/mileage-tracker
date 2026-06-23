@@ -1,4 +1,5 @@
 import { exchangeCodeForTokens } from "../jobberAuth.js";
+import { saveJobberTokens } from "../tokenStore.js";
 
 export default async function handler(req, res) {
   try {
@@ -14,16 +15,19 @@ export default async function handler(req, res) {
 
     const tokens = await exchangeCodeForTokens(code);
 
-    console.log("JOBBER_ACCESS_TOKEN:", tokens.access_token);
-    console.log("JOBBER_REFRESH_TOKEN:", tokens.refresh_token);
+    await saveJobberTokens(tokens);
 
     return res.status(200).send(`
       <h1>Jobber Connected Successfully</h1>
-      <p>Tokens were generated. Check the Vercel/terminal logs and save JOBBER_REFRESH_TOKEN securely.</p>
+      <p>Tokens were saved securely in Supabase.</p>
       <p>You can close this window.</p>
     `);
   } catch (error) {
-    console.error(error);
-    return res.status(500).send("Jobber OAuth callback failed.");
+    console.error("Jobber OAuth callback failed:", error);
+
+    return res.status(500).send(`
+      <h1>Jobber OAuth Callback Failed</h1>
+      <p>${error.message}</p>
+    `);
   }
 }

@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { refreshJobberToken, getRequiredEnv } from "./jobberAuth.js";
+import { getStoredJobberTokens, saveJobberTokens } from "./tokenStore.js";
 
 const JOBBER_GRAPHQL_URL = "https://api.getjobber.com/api/graphql";
 const JOBBER_GRAPHQL_VERSION = "2025-04-16";
@@ -9,8 +10,8 @@ const supabase = createClient(
   getRequiredEnv("SUPABASE_SERVICE_ROLE_KEY")
 );
 
-let accessToken = process.env.JOBBER_ACCESS_TOKEN;
-let refreshToken = process.env.JOBBER_REFRESH_TOKEN;
+let accessToken = null;
+let refreshToken = null;
 
 const TIME_SHEET_ENTRIES_QUERY = `
   query GetTimeSheetEntries($first: Int!) {
@@ -92,20 +93,39 @@ const JOBBER_VISITS_QUERY = `
   }
 `;
 
+async function loadTokens() {
+  const storedTokens = await getStoredJobberTokens();
+
+  accessToken = storedTokens?.access_token || process.env.JOBBER_ACCESS_TOKEN || null;
+  refreshToken = storedTokens?.refresh_token || process.env.JOBBER_REFRESH_TOKEN || null;
+
+  if (!refreshToken) {
+    throw new Error("Missing Jobber refresh token.");
+  }
+}
+
 async function refreshAccessToken() {
+  if (!refreshToken) {
+    await loadTokens();
+  }
+
   const tokens = await refreshJobberToken(refreshToken);
 
   accessToken = tokens.access_token;
 
   if (tokens.refresh_token) {
     refreshToken = tokens.refresh_token;
-    console.log("JOBBER_REFRESH_TOKEN_ROTATED:", tokens.refresh_token);
+    await saveJobberTokens(tokens);
   }
 
-  console.log("Jobber access token refreshed.");
+  console.log("Jobber access token refreshed and saved.");
 }
 
 async function callJobber(query, variables = {}, retry = true) {
+  if (!accessToken) {
+    await refreshAccessToken();
+  }
+
   const response = await fetch(JOBBER_GRAPHQL_URL, {
     method: "POST",
     headers: {
@@ -118,15 +138,14 @@ async function callJobber(query, variables = {}, retry = true) {
 
   const text = await response.text();
 
-console.log("JOBBER RAW RESPONSE:", text);
+  let json = {};
 
-let json = {};
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = { raw: text };
+  }
 
-try {
-  json = JSON.parse(text);
-} catch {
-  throw new Error(`Jobber returned non-JSON response: ${text}`);
-}
   const jsonText = JSON.stringify(json || {}).toLowerCase();
 
   const authError =
@@ -134,9 +153,10 @@ try {
     response.status === 403 ||
     jsonText.includes("access token expired") ||
     jsonText.includes("token expired") ||
+    jsonText.includes("token not recognized") ||
     jsonText.includes("unauthorized");
 
-  if ((!response.ok || json.errors) && retry && authError) {
+  if ((!response.ok || json.errors || json.message) && retry && authError) {
     await refreshAccessToken();
     return callJobber(query, variables, false);
   }
@@ -287,6 +307,8 @@ export default async function handler(req, res) {
   }
 
   try {
+    await loadTokens();
+
     const timesheetCount = await syncLatestJobberTimesheets();
     const visitCount = await syncLatestJobberVisits();
 
