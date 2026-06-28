@@ -8,6 +8,7 @@ import {
   Car,
   ClipboardList,
   Download,
+  ExternalLink,
   FileUp,
   Gauge,
   LayoutDashboard,
@@ -4397,6 +4398,7 @@ function MileageTable({
 function JobberMileageCell({ entry, timesheet }) {
   const isTimesheetEntry = Boolean(entry.jobber_timesheet_id);
   const sourceLabel = isTimesheetEntry ? "Jobber Timesheet" : "Jobber Visit";
+  const jobberJobUrl = getJobberJobUrl(entry, timesheet);
 
   return (
     <div className="max-w-[360px]">
@@ -4424,6 +4426,17 @@ function JobberMileageCell({ entry, timesheet }) {
         <p className="mt-2 text-xs font-semibold text-slate-500">
           {formatTimesheetTime(timesheet.start_at)} - {formatTimesheetTime(timesheet.end_at)} - {formatTimesheetDuration(timesheet.duration_minutes)}
         </p>
+      )}
+      {jobberJobUrl && (
+        <a
+          href={jobberJobUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-2 inline-flex items-center gap-1 text-xs font-black text-blue-700 hover:text-blue-900"
+        >
+          Open Jobber Job
+          <ExternalLink size={13} />
+        </a>
       )}
     </div>
   );
@@ -5001,6 +5014,16 @@ function getMileageSourceLabel(entry) {
   if (entry?.jobber_timesheet_id) return "Jobber Timesheet Entry";
   if (hasJobberMileage(entry)) return "Jobber Visit Entry";
   return "Manual Property Entry";
+}
+
+function getJobberJobUrl(entry, timesheet) {
+  if (timesheet?.jobber_job_url) return timesheet.jobber_job_url;
+  if (entry?.jobber_job_url) return entry.jobber_job_url;
+
+  const jobId = entry?.jobber_job_id || timesheet?.jobber_job_id;
+  if (!jobId) return "";
+
+  return `https://secure.getjobber.com/jobs/${encodeURIComponent(jobId)}`;
 }
 
 function getJobberSelectionFromEntry(entry) {
@@ -6239,9 +6262,13 @@ function downloadMileageCsv({ entries, workerMap, timesheetMap = new Map(), file
     "Timesheet Duration",
     "Timesheet Label",
     "Timesheet Note",
+    "Jobber Visit ID",
+    "Jobber Timesheet ID",
+    "Jobber Job ID",
     "Jobber Job Title",
     "Jobber Job Number",
     "Jobber Client",
+    "Jobber Property ID",
     "Jobber Address",
     "Jobber Link",
     "Normal Property",
@@ -6268,11 +6295,15 @@ function downloadMileageCsv({ entries, workerMap, timesheetMap = new Map(), file
       timesheet ? formatTimesheetDuration(timesheet.duration_minutes) : "",
       timesheet?.label || "",
       timesheet?.note || "",
+      entry.jobber_visit_id || "",
+      entry.jobber_timesheet_id || "",
+      entry.jobber_job_id || timesheet?.jobber_job_id || "",
       entry.jobber_job_title || timesheet?.jobber_job_title || "",
       entry.jobber_job_number || timesheet?.jobber_job_number || "",
       entry.jobber_client_name || timesheet?.jobber_client_name || "",
+      entry.jobber_property_id || timesheet?.jobber_property_id || "",
       entry.jobber_property_address || timesheet?.jobber_property_address || "",
-      timesheet?.jobber_job_url || "",
+      getJobberJobUrl(entry, timesheet),
       hasJobberMileage(entry) || entry.jobber_timesheet_id ? "" : getEntryPropertyDisplay(entry),
       getEntryPropertyCode(entry),
       getEntryPurpose(entry),

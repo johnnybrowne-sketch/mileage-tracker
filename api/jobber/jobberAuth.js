@@ -13,7 +13,7 @@ export function getRequiredEnv(name) {
 async function parseJobberTokenResponse(response) {
   const text = await response.text();
 
-  let json = {};
+  let json;
   try {
     json = JSON.parse(text);
   } catch {

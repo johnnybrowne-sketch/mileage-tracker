@@ -138,7 +138,7 @@ async function callJobber(query, variables = {}, retry = true) {
 
   const text = await response.text();
 
-  let json = {};
+  let json;
 
   try {
     json = JSON.parse(text);
