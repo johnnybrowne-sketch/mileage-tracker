@@ -3147,6 +3147,7 @@ function WorkerTimesheetsView({
 
 function TimesheetCard({ timesheet, onAddMileage }) {
   const completed = isTimesheetMileageCompleted(timesheet);
+  const jobberJobUrl = getJobberJobUrl({}, timesheet);
 
   return (
     <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -3193,9 +3194,9 @@ function TimesheetCard({ timesheet, onAddMileage }) {
             label="Address"
             value={timesheet.jobber_property_address || "No address"}
           />
-          {timesheet.jobber_job_url && (
+          {jobberJobUrl && (
             <a
-              href={timesheet.jobber_job_url}
+              href={jobberJobUrl}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-2 font-black text-blue-700 hover:text-blue-900 md:col-span-2"
@@ -5137,13 +5138,41 @@ function getMileageSourceLabel(entry) {
 }
 
 function getJobberJobUrl(entry, timesheet) {
-  if (timesheet?.jobber_job_url) return timesheet.jobber_job_url;
-  if (entry?.jobber_job_url) return entry.jobber_job_url;
-
   const jobId = entry?.jobber_job_id || timesheet?.jobber_job_id;
+  const decodedJobId = getJobberWebRecordId(jobId);
+
+  if (decodedJobId) {
+    return `https://secure.getjobber.com/work_orders/${encodeURIComponent(decodedJobId)}`;
+  }
+
+  return normalizeStoredJobberUrl(timesheet?.jobber_job_url || entry?.jobber_job_url || "");
+}
+
+function getJobberWebRecordId(jobId) {
   if (!jobId) return "";
 
-  return `https://secure.getjobber.com/jobs/${encodeURIComponent(jobId)}`;
+  const cleanJobId = String(jobId).trim().replace(/^job-/, "");
+
+  try {
+    const decodedId = window.atob(cleanJobId);
+    return decodedId.split("/").filter(Boolean).at(-1) || cleanJobId;
+  } catch {
+    return cleanJobId;
+  }
+}
+
+function normalizeStoredJobberUrl(url) {
+  const cleanUrl = String(url || "").trim();
+  if (!cleanUrl) return "";
+
+  const rawIdMatch = cleanUrl.match(/\/(?:jobs|work_orders)\/([^/?#]+)/);
+  const webId = getJobberWebRecordId(rawIdMatch?.[1] || "");
+
+  if (webId) {
+    return `https://secure.getjobber.com/work_orders/${encodeURIComponent(webId)}`;
+  }
+
+  return cleanUrl;
 }
 
 function getEntryStartOdometer(entry) {

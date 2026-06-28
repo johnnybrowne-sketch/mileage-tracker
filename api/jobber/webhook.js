@@ -188,7 +188,18 @@ function getVisitAddress(property) {
 
 function buildJobberJobUrl(jobId) {
   if (!jobId) return null;
-  return `https://secure.getjobber.com/jobs/${encodeURIComponent(jobId)}`;
+
+  const cleanJobId = String(jobId).trim();
+  let webId = cleanJobId;
+
+  try {
+    const decodedId = Buffer.from(cleanJobId, "base64").toString("utf8");
+    webId = decodedId.split("/").filter(Boolean).at(-1) || cleanJobId;
+  } catch {
+    // Keep the original id when it is already a Jobber web id.
+  }
+
+  return `https://secure.getjobber.com/work_orders/${encodeURIComponent(webId)}`;
 }
 
 function mapTimeSheetEntryToRow(entry, existingRow = null) {
