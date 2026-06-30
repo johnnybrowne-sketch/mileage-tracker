@@ -60,7 +60,7 @@ export function requiresOdometerOverride({
 
   if (start === null || expected === null) return false;
 
-  return start !== expected;
+  return start < expected;
 }
 
 export async function syncVehicleOdometerAfterMileage({

@@ -1536,13 +1536,17 @@ export default function WorkerDashboard() {
     }
 
     const invalidRow = rowsForUpload.find((row) => {
-      const selectedProperty = properties.find((property) => {
-        return String(property.property_code) === String(row.property_code);
-      });
+      const selectedProperty = findPropertyByCode(properties, row.property_code);
+      const selectedVehicle = findWorkerVehicleByDisplayName(
+        vehicles,
+        row.vehicle,
+        profile
+      );
 
       return (
         !row.entry_date ||
         !row.vehicle ||
+        !selectedVehicle ||
         !row.property_code ||
         !selectedProperty ||
         row.start_odometer === "" ||
@@ -1550,13 +1554,59 @@ export default function WorkerDashboard() {
         row.start_odometer === undefined ||
         row.end_odometer === "" ||
         row.end_odometer === null ||
-        row.end_odometer === undefined
+        row.end_odometer === undefined ||
+        row.miles === "" ||
+        row.miles === null ||
+        row.miles === undefined
       );
     });
 
     if (invalidRow) {
       setDraftError(
-        "Please complete every draft row before submitting. Each row needs date, vehicle, property code from the property list, start odo, and end odo."
+        "Please complete every draft row before submitting. Each row needs date, a vehicle from the dropdown, property code from the property list, start odo, end odo, and miles."
+      );
+      return;
+    }
+
+    const odometerPlan = buildPaperDraftOdometerPlan({
+      rows: rowsForUpload,
+      entries,
+      vehicles,
+      states: vehicleOdometerStates,
+      profile,
+    });
+    const blockedOdometerRow = rowsForUpload.find((row) => {
+      const plan = odometerPlan.get(String(row.id));
+      return plan?.requiresOverride && !String(row.odometer_override_reason || "").trim();
+    });
+
+    if (blockedOdometerRow) {
+      const plan = odometerPlan.get(String(blockedOdometerRow.id));
+      setDraftError(
+        `Entry #${blockedOdometerRow.entry_number || "?"} starts at ${blockedOdometerRow.start_odometer}, but ${plan.vehicleName} is already at ${plan.expectedStartOdometer}. Fix the start odometer or enter an override reason before submitting.`
+      );
+      return;
+    }
+
+    const blockedReviewRow = rowsForUpload.find((row) => {
+      const reviewState = getPaperDraftRowReviewState({
+        row,
+        plan: odometerPlan.get(String(row.id)),
+        properties,
+      });
+
+      return reviewState.blocksSubmit;
+    });
+
+    if (blockedReviewRow) {
+      const reviewState = getPaperDraftRowReviewState({
+        row: blockedReviewRow,
+        plan: odometerPlan.get(String(blockedReviewRow.id)),
+        properties,
+      });
+
+      setDraftError(
+        `Entry #${blockedReviewRow.entry_number || "?"} needs review: ${reviewState.message}`
       );
       return;
     }
@@ -1575,14 +1625,19 @@ export default function WorkerDashboard() {
       await handleSavePaperDraftRows(upload.id);
 
       for (const row of rowsForUpload) {
-        const selectedProperty = properties.find((property) => {
-          return String(property.property_code) === String(row.property_code);
-        });
+        const selectedProperty = findPropertyByCode(properties, row.property_code);
+        const selectedVehicle = findWorkerVehicleByDisplayName(
+          vehicles,
+          row.vehicle,
+          profile
+        );
+        const plan = odometerPlan.get(String(row.id));
 
         await saveWorkerMileageEntry({
           profile,
           entryDate: row.entry_date,
           vehicleName: row.vehicle,
+          vehicleId: selectedVehicle?.id || selectedVehicle?.base_vehicle_id || "",
           propertyCode: selectedProperty.property_code,
           propertyDisplay:
             selectedProperty.display_label ||
@@ -1590,6 +1645,11 @@ export default function WorkerDashboard() {
             selectedProperty.property_code,
           startOdometer: row.start_odometer,
           endOdometer: row.end_odometer,
+          expectedStartOdometer:
+            plan?.expectedStartOdometer !== undefined
+              ? plan.expectedStartOdometer
+              : row.start_odometer,
+          odometerOverrideReason: row.odometer_override_reason || "",
           purpose: row.purpose || "",
         });
       }
@@ -1811,6 +1871,8 @@ export default function WorkerDashboard() {
                 draftEntries={paperDraftEntries}
                 properties={properties}
                 vehicles={vehicles}
+                entries={entries}
+                vehicleOdometerStates={vehicleOdometerStates}
                 convertingUploadId={convertingUploadId}
                 savingDraftUploadId={savingDraftUploadId}
                 submittingDraftUploadId={submittingDraftUploadId}
@@ -3733,6 +3795,8 @@ function UploadSheetView({
   draftEntries,
   properties,
   vehicles,
+  entries,
+  vehicleOdometerStates,
   convertingUploadId,
   savingDraftUploadId,
   submittingDraftUploadId,
@@ -3873,9 +3937,33 @@ function UploadSheetView({
               const draftTotalMiles = uploadDraftRows.reduce((total, row) => {
                 return total + Number(row.miles || 0);
               }, 0);
-              const rowsNeedingReview = uploadDraftRows.filter((row) => {
-                return row.needs_review || row.review_notes;
+              const odometerPlan = buildPaperDraftOdometerPlan({
+                rows: uploadDraftRows,
+                entries,
+                vehicles,
+                states: vehicleOdometerStates,
+                profile,
               });
+              const reviewStateByRow = new Map(
+                uploadDraftRows.map((row) => {
+                  return [
+                    String(row.id),
+                    getPaperDraftRowReviewState({
+                      row,
+                      plan: odometerPlan.get(String(row.id)),
+                      properties,
+                    }),
+                  ];
+                })
+              );
+              const rowsNeedingReview = uploadDraftRows.filter((row) => {
+                return reviewStateByRow.get(String(row.id))?.blocksSubmit;
+              });
+              const detectedTotalMiles = toNumberOrNull(upload.total_mileage_detected);
+              const hasDetectedTotalMismatch =
+                detectedTotalMiles !== null &&
+                uploadDraftRows.length > 0 &&
+                Math.abs(detectedTotalMiles - draftTotalMiles) > 0.01;
 
               const isConverting = convertingUploadId === upload.id;
               const isSaving = savingDraftUploadId === upload.id;
@@ -4017,17 +4105,18 @@ function UploadSheetView({
                         ))}
                       </datalist>
 
-                      <datalist id="paper-draft-vehicle-options">
-                        {draftVehicleOptions.map((vehicleName) => (
-                          <option key={vehicleName} value={vehicleName} />
-                        ))}
-                      </datalist>
+                      {hasDetectedTotalMismatch && !isSubmitted && (
+                        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold leading-6 text-amber-800">
+                          The scanned sheet total is {formatMiles(detectedTotalMiles)}, but the draft rows add up to {formatMiles(draftTotalMiles)}.
+                          Check the Miles column before submitting.
+                        </div>
+                      )}
 
                       {rowsNeedingReview.length > 0 && !isSubmitted && (
                         <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold leading-6 text-red-700">
-                          AI marked {rowsNeedingReview.length} row
-                          {rowsNeedingReview.length === 1 ? "" : "s"} for review.
-                          Fix any "not readable" fields and property codes before submitting.
+                          {rowsNeedingReview.length} row
+                          {rowsNeedingReview.length === 1 ? "" : "s"} still need review.
+                          Fix vehicle, property code, odometer, miles, or override notes before submitting.
                         </div>
                       )}
 
@@ -4077,17 +4166,27 @@ function UploadSheetView({
                                 </td>
 
                                 <td className="px-3 py-3">
-                                  <input
-                                    type="text"
-                                    list="paper-draft-vehicle-options"
+                                  <select
                                     value={row.vehicle || ""}
                                     disabled={isSubmitted}
                                     onChange={(event) =>
                                       onUpdateDraftEntry(row.id, "vehicle", event.target.value)
                                     }
-                                    placeholder="Select vehicle"
                                     className="w-44 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                                  />
+                                  >
+                                    <option value="">Select vehicle</option>
+                                    {row.vehicle &&
+                                      !draftVehicleOptions.includes(row.vehicle) && (
+                                        <option value={row.vehicle}>
+                                          {row.vehicle} (scanned)
+                                        </option>
+                                      )}
+                                    {draftVehicleOptions.map((vehicleName) => (
+                                      <option key={vehicleName} value={vehicleName}>
+                                        {vehicleName}
+                                      </option>
+                                    ))}
+                                  </select>
                                 </td>
 
                                 <td className="px-3 py-3">
@@ -4166,21 +4265,62 @@ function UploadSheetView({
                                 </td>
 
                                 <td className="px-3 py-3">
-                                  <span
-                                    className={
-                                      "rounded-full px-3 py-1 text-xs font-black " +
-                                      (row.review_notes
-                                        ? "bg-red-50 text-red-700"
-                                        : row.needs_review
-                                          ? "bg-amber-50 text-amber-700"
-                                          : "bg-emerald-50 text-emerald-700")
-                                    }
-                                  >
-                                    {row.needs_review ? "Review" : "OK"}
-                                  </span>
+                                  {(() => {
+                                    const plan = odometerPlan.get(String(row.id));
+                                    const reviewState =
+                                      reviewStateByRow.get(String(row.id)) ||
+                                      getPaperDraftRowReviewState({
+                                        row,
+                                        plan,
+                                        properties,
+                                      });
+                                    const showReviewMessage =
+                                      reviewState.message &&
+                                      ![
+                                        "invalid_vehicle",
+                                        "missing_odometer",
+                                        "invalid_odometer_range",
+                                        "override_required",
+                                      ].includes(reviewState.reason);
+
+                                    return (
+                                      <>
+                                        {plan ? (
+                                          <PaperDraftOdometerStatus
+                                            plan={plan}
+                                            row={row}
+                                            disabled={isSubmitted}
+                                            onChange={(value) =>
+                                              onUpdateDraftEntry(
+                                                row.id,
+                                                "odometer_override_reason",
+                                                value
+                                              )
+                                            }
+                                          />
+                                        ) : null}
+
+                                        <span
+                                          className={
+                                            "rounded-full px-3 py-1 text-xs font-black " +
+                                            reviewState.className
+                                          }
+                                        >
+                                          {reviewState.label}
+                                        </span>
+
+                                        {showReviewMessage && (
+                                          <p className="mt-2 max-w-[220px] text-xs font-semibold leading-5 text-red-600">
+                                            {reviewState.message}
+                                          </p>
+                                        )}
+                                      </>
+                                    );
+                                  })()}
+
                                   {row.review_notes && (
-                                    <p className="mt-2 max-w-[220px] text-xs font-semibold leading-5 text-red-600">
-                                      {row.review_notes}
+                                    <p className="mt-2 max-w-[220px] text-xs font-semibold leading-5 text-slate-500">
+                                      AI note: {row.review_notes}
                                     </p>
                                   )}
                                   {row.ai_confidence !== null &&
@@ -4248,6 +4388,232 @@ function ReportMiniCard({ label, value }) {
         {label}
       </p>
       <p className="mt-1 text-lg font-black text-slate-950">{value}</p>
+    </div>
+  );
+}
+
+function getPaperDraftRowReviewState({ row, plan, properties }) {
+  const selectedProperty = findPropertyByCode(properties, row.property_code);
+  const mileageStatus = getPaperDraftMileageStatus(row);
+  const overrideReason = String(row.odometer_override_reason || "").trim();
+
+  if (!row.entry_date) {
+    return {
+      label: "Review",
+      className: "bg-red-50 text-red-700",
+      blocksSubmit: true,
+      reason: "missing_date",
+      message: "Add the entry date.",
+    };
+  }
+
+  if (!String(row.vehicle || "").trim() || plan?.status === "invalid_vehicle") {
+    return {
+      label: "Review",
+      className: "bg-red-50 text-red-700",
+      blocksSubmit: true,
+      reason: "invalid_vehicle",
+      message: "Choose the exact vehicle from the dropdown.",
+    };
+  }
+
+  if (!String(row.property_code || "").trim()) {
+    return {
+      label: "Review",
+      className: "bg-red-50 text-red-700",
+      blocksSubmit: true,
+      reason: "missing_property_code",
+      message: "Choose a property code from the property list.",
+    };
+  }
+
+  if (!selectedProperty) {
+    return {
+      label: "Review",
+      className: "bg-red-50 text-red-700",
+      blocksSubmit: true,
+      reason: "invalid_property_code",
+      message: "Property code must match a property in the system.",
+    };
+  }
+
+  if (plan?.status === "missing_odometer" || mileageStatus.reason === "missing_odometer") {
+    return {
+      label: "Review",
+      className: "bg-red-50 text-red-700",
+      blocksSubmit: true,
+      reason: "missing_odometer",
+      message: "Add start and ending odometer.",
+    };
+  }
+
+  if (
+    plan?.status === "invalid_odometer_range" ||
+    mileageStatus.reason === "invalid_odometer_range"
+  ) {
+    return {
+      label: "Review",
+      className: "bg-red-50 text-red-700",
+      blocksSubmit: true,
+      reason: "invalid_odometer_range",
+      message: "Ending odometer must be greater than or equal to start odometer.",
+    };
+  }
+
+  if (mileageStatus.blocksSubmit) {
+    return {
+      label: "Review",
+      className: "bg-red-50 text-red-700",
+      blocksSubmit: true,
+      reason: mileageStatus.reason,
+      message: mileageStatus.message,
+    };
+  }
+
+  if (plan?.requiresOverride && !overrideReason) {
+    return {
+      label: "Review",
+      className: "bg-red-50 text-red-700",
+      blocksSubmit: true,
+      reason: "override_required",
+      message: "Enter an override reason for the odometer difference.",
+    };
+  }
+
+  if (plan?.requiresOverride) {
+    return {
+      label: "Override",
+      className: "bg-amber-50 text-amber-700",
+      blocksSubmit: false,
+      reason: "override_ready",
+      message: "Override reason is ready for submit.",
+    };
+  }
+
+  return {
+    label: "OK",
+    className: "bg-emerald-50 text-emerald-700",
+    blocksSubmit: false,
+    reason: "ready",
+    message: "",
+  };
+}
+
+function getPaperDraftMileageStatus(row) {
+  const start = toNumberOrNull(row.start_odometer);
+  const end = toNumberOrNull(row.end_odometer);
+  const miles = toNumberOrNull(row.miles);
+
+  if (start === null || end === null) {
+    return {
+      blocksSubmit: true,
+      reason: "missing_odometer",
+      message: "Add start and ending odometer.",
+    };
+  }
+
+  if (end < start) {
+    return {
+      blocksSubmit: true,
+      reason: "invalid_odometer_range",
+      message: "Ending odometer must be greater than or equal to start odometer.",
+    };
+  }
+
+  const expectedMiles = end - start;
+
+  if (miles === null) {
+    return {
+      blocksSubmit: true,
+      reason: "missing_miles",
+      message: `Miles must be ${formatMiles(expectedMiles)} from the odometer.`,
+    };
+  }
+
+  if (Math.abs(miles - expectedMiles) > 0.01) {
+    return {
+      blocksSubmit: true,
+      reason: "miles_mismatch",
+      message: `Miles should be ${formatMiles(expectedMiles)} because ${end} - ${start} = ${formatMiles(expectedMiles)}.`,
+    };
+  }
+
+  return {
+    blocksSubmit: false,
+    reason: "ready",
+    message: "",
+    expectedMiles,
+  };
+}
+
+function PaperDraftOdometerStatus({ plan, row, disabled, onChange }) {
+  if (!plan) return null;
+
+  if (plan.status === "invalid_vehicle") {
+    return (
+      <div className="mb-3 max-w-[260px] rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold leading-5 text-red-700">
+        Choose the exact vehicle from the dropdown before submitting.
+      </div>
+    );
+  }
+
+  if (plan.status === "missing_odometer") {
+    return (
+      <div className="mb-3 max-w-[260px] rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold leading-5 text-amber-700">
+        Add start and ending odometer to check continuity.
+      </div>
+    );
+  }
+
+  if (plan.status === "invalid_odometer_range") {
+    return (
+      <div className="mb-3 max-w-[260px] rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold leading-5 text-red-700">
+        Ending odometer must be greater than or equal to start odometer.
+      </div>
+    );
+  }
+
+  if (plan.requiresOverride) {
+    return (
+      <div className="mb-3 max-w-[280px] rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold leading-5 text-red-700">
+        <p>
+          Start is lower than the previous odometer for {plan.vehicleName}.
+        </p>
+        <p className="mt-1">
+          Expected {plan.expectedStartOdometer}; entered {row.start_odometer}.
+        </p>
+        <input
+          type="text"
+          value={row.odometer_override_reason || ""}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="Override reason required"
+          className="mt-2 h-9 w-full rounded-xl border border-red-200 bg-white px-3 text-xs font-bold text-slate-900 outline-none transition placeholder:text-red-300 focus:border-red-400 focus:ring-4 focus:ring-red-100"
+        />
+      </div>
+    );
+  }
+
+  if (plan.startsHigherThanExpected) {
+    return (
+      <div className="mb-3 max-w-[280px] rounded-2xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold leading-5 text-blue-700">
+        Starts higher than previous odometer. OK to submit;{" "}
+        {formatMiles(plan.unattributedMiles)} will be recorded as unattributed miles.
+      </div>
+    );
+  }
+
+  if (plan.isContinuous) {
+    return (
+      <div className="mb-3 max-w-[260px] rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold leading-5 text-emerald-700">
+        Continuous with previous odometer: {plan.expectedStartOdometer}.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-3 max-w-[260px] rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold leading-5 text-slate-600">
+      Previous odometer: {plan.expectedStartOdometer}.
     </div>
   );
 }
@@ -5308,6 +5674,125 @@ function getWorkerFormVehicleName(form, vehicles, profile) {
   });
 
   return getWorkerVehicleDisplayName(selectedVehicle, profile);
+}
+
+function findWorkerVehicleByDisplayName(vehicles, vehicleName, profile) {
+  const normalizedVehicleName = normalizeVehicleLabel(vehicleName);
+
+  if (!normalizedVehicleName) {
+    return null;
+  }
+
+  return (
+    (vehicles || []).find((vehicle) => {
+      return (
+        normalizeVehicleLabel(getWorkerVehicleDisplayName(vehicle, profile)) ===
+        normalizedVehicleName
+      );
+    }) || null
+  );
+}
+
+function buildPaperDraftOdometerPlan({
+  rows = [],
+  entries = [],
+  vehicles = [],
+  states = [],
+  profile = null,
+}) {
+  const planMap = new Map();
+  const expectedByVehicle = new Map();
+
+  const sortedRows = [...(rows || [])].sort((first, second) => {
+    const firstEntry = Number(first.entry_number || 0);
+    const secondEntry = Number(second.entry_number || 0);
+
+    if (firstEntry !== secondEntry) return firstEntry - secondEntry;
+
+    return String(first.entry_date || "").localeCompare(String(second.entry_date || ""));
+  });
+
+  sortedRows.forEach((row) => {
+    const selectedVehicle = findWorkerVehicleByDisplayName(
+      vehicles,
+      row.vehicle,
+      profile
+    );
+
+    if (!selectedVehicle) {
+      planMap.set(String(row.id), {
+        status: "invalid_vehicle",
+        vehicleName: row.vehicle || "",
+      });
+      return;
+    }
+
+    const vehicleName = getWorkerVehicleDisplayName(selectedVehicle, profile);
+    const vehicleKey = normalizeVehicleLabel(vehicleName);
+    const latestEndOdometer = getLatestEndOdometerForVehicle(entries, vehicleName);
+    const baseline = getExpectedVehicleStart({
+      states,
+      vehicle: selectedVehicle,
+      vehicleName,
+      fallbackOdometer: latestEndOdometer,
+    });
+    const expectedStartOdometer = expectedByVehicle.has(vehicleKey)
+      ? expectedByVehicle.get(vehicleKey)
+      : String(baseline.expectedStartOdometer || "0");
+    const expectedStart = toNumberOrNull(expectedStartOdometer);
+    const start = toNumberOrNull(row.start_odometer);
+    const end = toNumberOrNull(row.end_odometer);
+
+    if (start === null || end === null) {
+      planMap.set(String(row.id), {
+        status: "missing_odometer",
+        vehicleName,
+        expectedStartOdometer,
+      });
+      return;
+    }
+
+    if (end < start) {
+      planMap.set(String(row.id), {
+        status: "invalid_odometer_range",
+        vehicleName,
+        expectedStartOdometer,
+        startOdometer: start,
+        endOdometer: end,
+      });
+      return;
+    }
+
+    const requiresOverride =
+      expectedStart !== null && start < expectedStart;
+    const startsHigherThanExpected =
+      expectedStart !== null && start > expectedStart;
+    const isContinuous = expectedStart !== null && start === expectedStart;
+
+    planMap.set(String(row.id), {
+      status: requiresOverride
+        ? "requires_override"
+        : startsHigherThanExpected
+          ? "starts_higher"
+          : isContinuous
+            ? "continuous"
+            : "ready",
+      vehicleName,
+      expectedStartOdometer,
+      startOdometer: start,
+      endOdometer: end,
+      requiresOverride,
+      startsHigherThanExpected,
+      isContinuous,
+      unattributedMiles: startsHigherThanExpected ? start - expectedStart : 0,
+    });
+
+    if (end >= start) {
+      expectedByVehicle.set(vehicleKey, String(end));
+    }
+  });
+
+  return planMap;
 }
 
 function formatVehicleNameForDisplay(vehicleName, profile) {
