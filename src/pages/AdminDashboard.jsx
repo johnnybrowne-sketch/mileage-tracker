@@ -45,6 +45,7 @@ import {
   requiresOdometerOverride,
   syncVehicleOdometerAfterMileage,
 } from "../services/vehicleOdometerService";
+import { expandFleetVehicleOptions } from "../services/fleetVehicleService";
 import {
   formatTimesheetDuration,
   getAllJobberTimesheets,
@@ -66,6 +67,8 @@ const logoPaths = [
   "/logo.svg",
   "/logo.png",
 ];
+
+const OTHER_COMPANY_VEHICLE_VALUE = "__other_company_vehicle__";
 
 const navigationItems = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -101,6 +104,7 @@ const blankEditForm = {
   workerId: "",
   entryDate: "",
   vehicleName: "",
+  customVehicleName: "",
   propertyCode: "",
   startOdometer: "",
   expectedStartOdometer: "",
@@ -115,6 +119,7 @@ const blankAddForm = {
   workerId: "",
   entryDate: getTodayInputValue(),
   vehicleName: "",
+  customVehicleName: "",
   propertyCode: "",
   startOdometer: "",
   expectedStartOdometer: "",
@@ -128,6 +133,7 @@ const blankAddForm = {
 const blankTimesheetMileageForm = {
   timesheetId: "",
   vehicleName: "",
+  customVehicleName: "",
   startOdometer: "",
   expectedStartOdometer: "",
   usesSharedVehicleOdometer: false,
@@ -918,7 +924,7 @@ export default function AdminDashboard() {
     setEntries(entryRows);
     setMileageSheets(sheetRows);
     setProperties(propertiesResult.data || []);
-    setVehicles(vehiclesResult.data || []);
+    setVehicles(expandFleetVehicleOptions(vehiclesResult.data || []));
     setVehicleOdometerStates(vehicleOdometersResult.data || []);
     setAssignments(assignmentsResult.data || []);
     setMessages(messagesResult.data || []);
@@ -1035,6 +1041,7 @@ export default function AdminDashboard() {
         const worker = workers.find((item) => String(item.id) === String(value));
 
         nextForm.vehicleName = worker ? getPersonalVehicleName(worker) : "";
+        nextForm.customVehicleName = "";
         nextForm.startOdometer = "";
         nextForm.expectedStartOdometer = "";
         nextForm.usesSharedVehicleOdometer = false;
@@ -1046,26 +1053,58 @@ export default function AdminDashboard() {
         const worker = workers.find(
           (item) => String(item.id) === String(currentForm.workerId)
         );
+        const effectiveVehicleName =
+          value === OTHER_COMPANY_VEHICLE_VALUE
+            ? currentForm.customVehicleName
+            : value;
 
         const fallbackOdometer = getLatestEndOdometerForWorkerVehicle({
           entries,
           worker,
-          vehicleName: value,
+          vehicleName: effectiveVehicleName,
           workerMap,
         });
-        const matchedVehicle = findVehicleByDisplayName(vehicles, value);
+        const matchedVehicle = findVehicleByDisplayName(vehicles, effectiveVehicleName);
         const odometerStart = getExpectedVehicleStart({
           states: vehicleOdometerStates,
           vehicle: matchedVehicle,
-          vehicleName: value,
+          vehicleName: effectiveVehicleName,
           fallbackOdometer,
         });
 
-        nextForm.startOdometer = String(odometerStart.expectedStartOdometer || "");
-        nextForm.expectedStartOdometer = String(
-          odometerStart.expectedStartOdometer || ""
-        );
-        nextForm.usesSharedVehicleOdometer = odometerStart.isSharedVehicle;
+        nextForm.startOdometer = effectiveVehicleName
+          ? String(odometerStart.expectedStartOdometer || "")
+          : "";
+        nextForm.expectedStartOdometer = effectiveVehicleName
+          ? String(odometerStart.expectedStartOdometer || "")
+          : "";
+        nextForm.usesSharedVehicleOdometer = effectiveVehicleName
+          ? odometerStart.isSharedVehicle
+          : false;
+        nextForm.customVehicleName =
+          value === OTHER_COMPANY_VEHICLE_VALUE ? currentForm.customVehicleName : "";
+        nextForm.odometerOverrideReason = "";
+        nextForm.endOdometer = "";
+      }
+
+      if (
+        field === "customVehicleName" &&
+        currentForm.vehicleName === OTHER_COMPANY_VEHICLE_VALUE
+      ) {
+        const odometerStart = getExpectedVehicleStart({
+          states: vehicleOdometerStates,
+          vehicle: null,
+          vehicleName: value,
+          fallbackOdometer: "",
+        });
+
+        nextForm.startOdometer = value
+          ? String(odometerStart.expectedStartOdometer || "")
+          : "";
+        nextForm.expectedStartOdometer = value
+          ? String(odometerStart.expectedStartOdometer || "")
+          : "";
+        nextForm.usesSharedVehicleOdometer = Boolean(value);
         nextForm.odometerOverrideReason = "";
         nextForm.endOdometer = "";
       }
@@ -1146,8 +1185,10 @@ export default function AdminDashboard() {
         throw new Error("Please select a worker.");
       }
 
-      if (!addForm.vehicleName) {
-        throw new Error("Please select a vehicle.");
+      const effectiveVehicleName = getAdminFormVehicleName(addForm);
+
+      if (!effectiveVehicleName) {
+        throw new Error("Please select a vehicle or enter the other company vehicle name.");
       }
 
       const selectedProperty = properties.find(
@@ -1186,11 +1227,16 @@ export default function AdminDashboard() {
         );
       }
 
+      const saveForm = {
+        ...addForm,
+        vehicleName: effectiveVehicleName,
+      };
+
       const payload = buildMileagePayloadForSchema({
         entries,
         workers,
         worker: selectedWorkerForAdd,
-        form: addForm,
+        form: saveForm,
         property: selectedProperty,
         jobberVisit: selectedJobberVisit,
         properties,
@@ -1198,12 +1244,12 @@ export default function AdminDashboard() {
       });
 
       const insertedEntry = await insertWithSchemaRetry("mileage_entries", payload);
-      const matchedVehicle = findVehicleByDisplayName(vehicles, addForm.vehicleName);
+      const matchedVehicle = findVehicleByDisplayName(vehicles, effectiveVehicleName);
 
       await syncVehicleOdometerAfterMileage({
         vehicle: matchedVehicle,
         vehicleId: matchedVehicle?.id || "",
-        vehicleName: addForm.vehicleName,
+        vehicleName: effectiveVehicleName,
         workerId: selectedWorkerForAdd.id,
         workerName: selectedWorkerForAdd.full_name || selectedWorkerForAdd.email || "",
         mileageEntryId: insertedEntry?.id || "",
@@ -1217,7 +1263,7 @@ export default function AdminDashboard() {
 
       setSelectedMonth(getMonthKeyFromDate(addForm.entryDate));
       setSelectedWorkerId(selectedWorkerForAdd.id);
-      setSelectedVehicle(addForm.vehicleName);
+      setSelectedVehicle(effectiveVehicleName);
       setSelectedStatus("all");
       setSearchTerm("");
       setAddSuccess("Mileage entry added successfully.");
@@ -1228,6 +1274,7 @@ export default function AdminDashboard() {
         ...blankAddForm,
         workerId: selectedWorkerForAdd.id,
         vehicleName: addForm.vehicleName,
+        customVehicleName: addForm.customVehicleName,
         startOdometer: addForm.endOdometer,
         expectedStartOdometer: addForm.endOdometer,
         usesSharedVehicleOdometer: addForm.usesSharedVehicleOdometer,
@@ -1298,25 +1345,57 @@ export default function AdminDashboard() {
         const worker = selectedTimesheet
           ? getWorkerForTimesheet(selectedTimesheet, workerMap)
           : null;
+        const effectiveVehicleName =
+          value === OTHER_COMPANY_VEHICLE_VALUE
+            ? currentForm.customVehicleName
+            : value;
         const fallbackOdometer = getLatestEndOdometerForWorkerVehicle({
           entries,
           worker,
-          vehicleName: value,
+          vehicleName: effectiveVehicleName,
           workerMap,
         });
-        const matchedVehicle = findVehicleByDisplayName(vehicles, value);
+        const matchedVehicle = findVehicleByDisplayName(vehicles, effectiveVehicleName);
         const odometerStart = getExpectedVehicleStart({
           states: vehicleOdometerStates,
           vehicle: matchedVehicle,
-          vehicleName: value,
+          vehicleName: effectiveVehicleName,
           fallbackOdometer,
         });
 
-        nextForm.startOdometer = String(odometerStart.expectedStartOdometer || "");
-        nextForm.expectedStartOdometer = String(
-          odometerStart.expectedStartOdometer || ""
-        );
-        nextForm.usesSharedVehicleOdometer = odometerStart.isSharedVehicle;
+        nextForm.startOdometer = effectiveVehicleName
+          ? String(odometerStart.expectedStartOdometer || "")
+          : "";
+        nextForm.expectedStartOdometer = effectiveVehicleName
+          ? String(odometerStart.expectedStartOdometer || "")
+          : "";
+        nextForm.usesSharedVehicleOdometer = effectiveVehicleName
+          ? odometerStart.isSharedVehicle
+          : false;
+        nextForm.customVehicleName =
+          value === OTHER_COMPANY_VEHICLE_VALUE ? currentForm.customVehicleName : "";
+        nextForm.odometerOverrideReason = "";
+        nextForm.endOdometer = "";
+      }
+
+      if (
+        field === "customVehicleName" &&
+        currentForm.vehicleName === OTHER_COMPANY_VEHICLE_VALUE
+      ) {
+        const odometerStart = getExpectedVehicleStart({
+          states: vehicleOdometerStates,
+          vehicle: null,
+          vehicleName: value,
+          fallbackOdometer: "",
+        });
+
+        nextForm.startOdometer = value
+          ? String(odometerStart.expectedStartOdometer || "")
+          : "";
+        nextForm.expectedStartOdometer = value
+          ? String(odometerStart.expectedStartOdometer || "")
+          : "";
+        nextForm.usesSharedVehicleOdometer = Boolean(value);
         nextForm.odometerOverrideReason = "";
         nextForm.endOdometer = "";
       }
@@ -1343,8 +1422,10 @@ export default function AdminDashboard() {
       return;
     }
 
-    if (!timesheetMileageForm.vehicleName) {
-      setTimesheetError("Please select a vehicle.");
+    const effectiveVehicleName = getAdminFormVehicleName(timesheetMileageForm);
+
+    if (!effectiveVehicleName) {
+      setTimesheetError("Please select a vehicle or enter the other company vehicle name.");
       return;
     }
 
@@ -1368,14 +1449,14 @@ export default function AdminDashboard() {
 
       const matchedVehicle = findVehicleByDisplayName(
         vehicles,
-        timesheetMileageForm.vehicleName
+        effectiveVehicleName
       );
 
       const savedEntry = await saveWorkerMileageEntry({
         profile: worker,
         entryDate: getTimesheetDateInputValue(selectedTimesheet) || getTodayInputValue(),
         vehicleId: matchedVehicle?.id || "",
-        vehicleName: timesheetMileageForm.vehicleName,
+        vehicleName: effectiveVehicleName,
         propertyCode: resolvePropertyCode({
           address: selectedTimesheet.jobber_property_address,
           properties,
@@ -2583,8 +2664,26 @@ function AdminAddEntryView({
                     {vehicleName}
                   </option>
                 ))}
+                <option value={OTHER_COMPANY_VEHICLE_VALUE}>
+                  Other company vehicle
+                </option>
               </select>
             </FormField>
+
+            {addForm.vehicleName === OTHER_COMPANY_VEHICLE_VALUE && (
+              <FormField label="Other Vehicle Name">
+                <input
+                  type="text"
+                  required
+                  value={addForm.customVehicleName}
+                  onChange={(event) =>
+                    updateAddForm("customVehicleName", event.target.value)
+                  }
+                  placeholder="Enter the exact vehicle name"
+                  className={inputClass}
+                />
+              </FormField>
+            )}
 
             <FormField label="Status">
               <select
@@ -3463,8 +3562,26 @@ function AdminTimesheetsView({
                     {vehicleName}
                   </option>
                 ))}
+                <option value={OTHER_COMPANY_VEHICLE_VALUE}>
+                  Other company vehicle
+                </option>
               </select>
             </FormField>
+
+            {mileageForm.vehicleName === OTHER_COMPANY_VEHICLE_VALUE && (
+              <FormField label="Other Vehicle Name">
+                <input
+                  type="text"
+                  required
+                  value={mileageForm.customVehicleName}
+                  onChange={(event) =>
+                    updateMileageForm("customVehicleName", event.target.value)
+                  }
+                  placeholder="Enter the exact vehicle name"
+                  className={inputClass}
+                />
+              </FormField>
+            )}
 
             <OdometerInput
               label="Start Odo"
@@ -5384,6 +5501,14 @@ function findVehicleByDisplayName(vehicles, vehicleName) {
       return normalizeText(getVehicleLabel(vehicle)) === normalizedVehicleName;
     }) || null
   );
+}
+
+function getAdminFormVehicleName(form) {
+  if (form?.vehicleName === OTHER_COMPANY_VEHICLE_VALUE) {
+    return String(form.customVehicleName || "").trim();
+  }
+
+  return String(form?.vehicleName || "").trim();
 }
 
 function getPersonalVehicleName(worker) {

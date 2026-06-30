@@ -1,4 +1,8 @@
 import { supabase } from "../lib/supabaseClient";
+import {
+  expandFleetVehicleOptions,
+  getVehicleDisplayName,
+} from "./fleetVehicleService";
 
 function normalizeVehicleName(name) {
   return String(name || "")
@@ -43,17 +47,7 @@ export async function getWorkerVehicles(workerId) {
 
   const { data: vehicles, error: vehiclesError } = await supabase
     .from("vehicles")
-    .select(
-      `
-      id,
-      user_id,
-      vehicle_name,
-      is_default,
-      is_company_vehicle,
-      is_active,
-      created_at
-    `
-    )
+    .select("*")
     .eq("is_active", true)
     .order("vehicle_name", { ascending: true });
 
@@ -71,8 +65,8 @@ export async function getWorkerVehicles(workerId) {
 
   const uniqueVehiclesMap = new Map();
 
-  for (const vehicle of filteredVehicles) {
-    const displayName = getCleanVehicleDisplayName(vehicle.vehicle_name);
+  for (const vehicle of expandFleetVehicleOptions(filteredVehicles)) {
+    const displayName = getCleanVehicleDisplayName(getVehicleDisplayName(vehicle));
     const normalizedKey = normalizeVehicleName(displayName);
 
     if (!normalizedKey) {
