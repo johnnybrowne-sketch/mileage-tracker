@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabaseClient";
+import { buildMileageWorkflowFields } from "./mileageWorkflowService";
 
 export function getCurrentMonthKey() {
   const now = new Date();
@@ -252,28 +253,29 @@ export async function saveWorkerMileageEntry({
       }
     : {};
 
-  const { data, error } = await supabase
-    .from("mileage_entries")
-    .insert({
-      sheet_id: sheet.id,
-      user_id: profile.id,
-      entry_date: entryDate,
-      driver_name: profile.full_name || profile.email || "Worker",
-      property_code: propertyCode,
-      property_display: propertyDisplay,
-      start_odometer: start,
-      end_odometer: end,
-      miles,
-      purpose: purpose?.trim() || null,
-      vehicle: vehicleName,
-      status: "saved",
-      jobber_timesheet_id: jobberTimesheetId,
-      ...jobberPayload,
-    })
-    .select("*")
-    .single();
-
-  if (error) throw error;
+  const data = await insertMileageEntryWithSchemaRetry({
+    sheet_id: sheet.id,
+    user_id: profile.id,
+    entry_date: entryDate,
+    driver_name: profile.full_name || profile.email || "Worker",
+    property_code: propertyCode,
+    property_display: propertyDisplay,
+    start_odometer: start,
+    end_odometer: end,
+    miles,
+    purpose: purpose?.trim() || null,
+    vehicle: vehicleName,
+    status: "saved",
+    jobber_timesheet_id: jobberTimesheetId,
+    ...jobberPayload,
+    ...buildMileageWorkflowFields({
+      jobberVisit,
+      jobberTimesheetId,
+      vehicleName,
+      startOdometer,
+      purpose,
+    }),
+  });
 
   if (jobberTimesheetId) {
     const { error: updateTimesheetError } = await supabase
@@ -291,6 +293,62 @@ export async function saveWorkerMileageEntry({
   }
 
   return data;
+}
+
+async function insertMileageEntryWithSchemaRetry(initialPayload) {
+  let payload = stripUndefinedValues(initialPayload);
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 18; attempt += 1) {
+    const { data, error } = await supabase
+      .from("mileage_entries")
+      .insert(payload)
+      .select("*")
+      .single();
+
+    if (!error) {
+      return data;
+    }
+
+    lastError = error;
+
+    const missingColumn = getMissingColumnFromError(error?.message);
+
+    if (missingColumn && Object.prototype.hasOwnProperty.call(payload, missingColumn)) {
+      const nextPayload = { ...payload };
+      delete nextPayload[missingColumn];
+      payload = nextPayload;
+      continue;
+    }
+
+    throw error;
+  }
+
+  throw lastError || new Error("Unable to save mileage entry.");
+}
+
+function stripUndefinedValues(payload) {
+  return Object.fromEntries(
+    Object.entries(payload || {}).filter(([, value]) => value !== undefined)
+  );
+}
+
+function getMissingColumnFromError(message) {
+  const cleanMessage = String(message || "");
+
+  const schemaCacheMatch = cleanMessage.match(
+    /Could not find the '([^']+)' column/i
+  );
+
+  if (schemaCacheMatch?.[1]) {
+    return schemaCacheMatch[1];
+  }
+
+  const missingColumnMatch = cleanMessage.match(
+    /column "([^"]+)" (?:does not exist|of relation "[^"]+" does not exist)/i
+  );
+
+  return missingColumnMatch?.[1] || "";
 }
 
 export async function deleteMileageEntry(entryId) {

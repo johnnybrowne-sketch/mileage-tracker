@@ -34,6 +34,12 @@ import { getProfileForUser } from "../services/profileService";
 import { saveWorkerMileageEntry } from "../services/mileageService";
 import { getJobberVisitsForMonth } from "../services/jobberService";
 import {
+  buildMileageWorkflowFields,
+  getBusinessCategoryLabelForEntry,
+  getMileageBucketLabelForEntry,
+} from "../services/mileageWorkflowService";
+import { resolvePropertyCode } from "../services/propertyCodeService";
+import {
   formatTimesheetDuration,
   getAllJobberTimesheets,
   getTimesheetDateInputValue,
@@ -1129,6 +1135,7 @@ export default function AdminDashboard() {
         form: addForm,
         property: selectedProperty,
         jobberVisit: selectedJobberVisit,
+        properties,
         sheetId,
       });
 
@@ -1252,7 +1259,11 @@ export default function AdminDashboard() {
         profile: worker,
         entryDate: getTimesheetDateInputValue(selectedTimesheet) || getTodayInputValue(),
         vehicleName: timesheetMileageForm.vehicleName,
-        propertyCode: getTimesheetPropertyCode(selectedTimesheet),
+        propertyCode: resolvePropertyCode({
+          address: selectedTimesheet.jobber_property_address,
+          properties,
+          fallbackCode: getTimesheetPropertyCode(selectedTimesheet),
+        }),
         propertyDisplay: getTimesheetPropertyDisplay(selectedTimesheet),
         startOdometer: timesheetMileageForm.startOdometer,
         endOdometer: timesheetMileageForm.endOdometer,
@@ -1320,6 +1331,7 @@ export default function AdminDashboard() {
         form: editForm,
         property: selectedProperty,
         jobberVisit: editJobberVisit,
+        properties,
         sheetId,
       });
 
@@ -1331,6 +1343,7 @@ export default function AdminDashboard() {
         form: editForm,
         property: selectedProperty,
         jobberVisit: editJobberVisit,
+        properties,
         sheetId,
       });
 
@@ -1710,6 +1723,7 @@ export default function AdminDashboard() {
                 recentEntries={selectedMonthEntries.slice(0, 8)}
                 workerMap={workerMap}
                 timesheetMap={timesheetMap}
+                properties={properties}
                 setActiveView={setActiveView}
               />
             )}
@@ -1865,6 +1879,7 @@ export default function AdminDashboard() {
                 workerMap={workerMap}
                 vehicleOptions={reviewVehicleOptions}
                 timesheetMap={timesheetMap}
+                properties={properties}
               />
             )}
 
@@ -2088,6 +2103,7 @@ function OverviewView({
   recentEntries,
   workerMap,
   timesheetMap,
+  properties,
   setActiveView,
 }) {
   return (
@@ -2256,6 +2272,7 @@ function OverviewView({
             entries={recentEntries}
             workerMap={workerMap}
             timesheetMap={timesheetMap}
+            properties={properties}
             compact
           />
         </div>
@@ -2312,6 +2329,7 @@ function MileageReviewView({
           entries={entries}
           workerMap={workerMap}
           timesheetMap={timesheetMap}
+          properties={properties}
           fileName={`admin-mileage-${selectedMonth || "all"}.csv`}
           label="Download CSV"
         />
@@ -2358,6 +2376,7 @@ function MileageReviewView({
           entries={entries}
           workerMap={workerMap}
           timesheetMap={timesheetMap}
+          properties={properties}
           onEditEntry={onEditEntry}
           onDeleteEntry={onDeleteEntry}
         />
@@ -2997,6 +3016,7 @@ function ReportsView({
   workerMap,
   vehicleOptions,
   timesheetMap,
+  properties,
 }) {
   const summary = getMileageSummary(filteredEntries);
   const jobberEntryCount = filteredEntries.filter((entry) => {
@@ -3020,6 +3040,7 @@ function ReportsView({
           entries={filteredEntries}
           workerMap={workerMap}
           timesheetMap={timesheetMap}
+          properties={properties}
           fileName={buildReportFileName({
             selectedMonth,
             selectedWorker,
@@ -3112,6 +3133,7 @@ function ReportsView({
           entries={filteredEntries}
           workerMap={workerMap}
           timesheetMap={timesheetMap}
+          properties={properties}
           compact
         />
       </div>
@@ -4250,6 +4272,7 @@ function MileageTable({
   entries,
   workerMap,
   timesheetMap = new Map(),
+  properties = [],
   compact = false,
   onEditEntry,
   onDeleteEntry,
@@ -4339,6 +4362,7 @@ function MileageTable({
                     <JobberMileageCell
                       entry={entry}
                       timesheet={timesheetMap.get(String(entry.jobber_timesheet_id))}
+                      properties={properties}
                     />
                   ) : (
                     getEntryPropertyDisplay(entry) ||
@@ -4349,6 +4373,12 @@ function MileageTable({
 
                 <td className="max-w-[280px] break-words px-4 py-4 text-slate-600">
                   {getEntryPurpose(entry) || "—"}
+                  <p className="mt-1 text-[11px] font-black uppercase text-slate-400">
+                    {getMileageBucketLabelForEntry(
+                      entry,
+                      timesheetMap.get(String(entry.jobber_timesheet_id))
+                    )}
+                  </p>
                 </td>
 
                 <td className="px-4 py-4 text-slate-600">
@@ -4396,10 +4426,15 @@ function MileageTable({
   );
 }
 
-function JobberMileageCell({ entry, timesheet }) {
+function JobberMileageCell({ entry, timesheet, properties = [] }) {
   const isTimesheetEntry = Boolean(entry.jobber_timesheet_id);
   const sourceLabel = isTimesheetEntry ? "Jobber Timesheet" : "Jobber Visit";
   const jobberJobUrl = getJobberJobUrl(entry, timesheet);
+  const resolvedPropertyCode = getResolvedEntryPropertyCode(
+    entry,
+    timesheet,
+    properties
+  );
 
   return (
     <div className="max-w-[360px]">
@@ -4412,6 +4447,11 @@ function JobberMileageCell({ entry, timesheet }) {
       {(entry.jobber_job_number || timesheet?.jobber_job_number) && (
         <p className="mt-1 text-xs font-bold text-slate-500">
           Job #{entry.jobber_job_number || timesheet?.jobber_job_number}
+        </p>
+      )}
+      {resolvedPropertyCode && (
+        <p className="mt-1 text-xs font-black text-slate-600">
+          Property Code: {resolvedPropertyCode}
         </p>
       )}
       <p className="mt-2 text-sm font-semibold text-slate-700">
@@ -4714,7 +4754,14 @@ function QuickActionCard({ icon, title, text, onClick }) {
   );
 }
 
-function DownloadButton({ entries, workerMap, timesheetMap, fileName, label }) {
+function DownloadButton({
+  entries,
+  workerMap,
+  timesheetMap,
+  properties,
+  fileName,
+  label,
+}) {
   return (
     <button
       type="button"
@@ -4723,6 +4770,7 @@ function DownloadButton({ entries, workerMap, timesheetMap, fileName, label }) {
           entries,
           workerMap,
           timesheetMap,
+          properties,
           fileName,
         })
       }
@@ -5017,6 +5065,24 @@ function getMileageSourceLabel(entry) {
   return "Manual Property Entry";
 }
 
+function getResolvedEntryPropertyCode(entry, timesheet, properties = []) {
+  const address =
+    entry?.jobber_property_address ||
+    timesheet?.jobber_property_address ||
+    getEntryPropertyDisplay(entry) ||
+    "";
+
+  if (hasJobberMileage(entry) || entry?.jobber_timesheet_id) {
+    return resolvePropertyCode({
+      address,
+      properties,
+      fallbackCode: getEntryPropertyCode(entry),
+    });
+  }
+
+  return getEntryPropertyCode(entry);
+}
+
 function getJobberJobUrl(entry, timesheet) {
   const jobId = entry?.jobber_job_id || timesheet?.jobber_job_id;
   const decodedJobId = getJobberWebRecordId(jobId);
@@ -5086,9 +5152,13 @@ function getJobberPropertyDisplay(jobberVisit) {
   );
 }
 
-function getMileagePropertyCodeValue({ form, property, jobberVisit }) {
+function getMileagePropertyCodeValue({ form, property, jobberVisit, properties = [] }) {
   if (jobberVisit) {
-    return getJobberPropertyCode(jobberVisit) || form.propertyCode;
+    return resolvePropertyCode({
+      address: jobberVisit.jobberPropertyAddress,
+      properties,
+      fallbackCode: getJobberPropertyCode(jobberVisit) || form.propertyCode,
+    });
   }
 
   return property?.property_code || form.propertyCode;
@@ -5463,6 +5533,7 @@ function buildCompleteMileageEntryUpdatePayload({
   form,
   property,
   jobberVisit,
+  properties,
   sheetId,
 }) {
   const row = entry || {};
@@ -5471,6 +5542,7 @@ function buildCompleteMileageEntryUpdatePayload({
     form,
     property,
     jobberVisit,
+    properties,
   });
   const propertyDisplayValue = getMileagePropertyDisplayValue({
     form,
@@ -5567,6 +5639,13 @@ function buildCompleteMileageEntryUpdatePayload({
     value: form.status || "saved",
   });
 
+  setExistingMileageWorkflowColumns({
+    payload,
+    row,
+    form,
+    jobberVisit,
+  });
+
   setExistingJobberMileageColumns({ payload, row, jobberVisit });
 
   return payload;
@@ -5590,6 +5669,21 @@ function setExistingJobberMileageColumns({ payload, row, jobberVisit }) {
   });
 }
 
+function setExistingMileageWorkflowColumns({ payload, row, form, jobberVisit }) {
+  const workflowColumns = buildMileageWorkflowFields({
+    jobberVisit,
+    vehicleName: form.vehicleName,
+    startOdometer: form.startOdometer,
+    purpose: form.purpose,
+  });
+
+  Object.entries(workflowColumns).forEach(([columnName, value]) => {
+    if (hasOwnColumn(row, columnName)) {
+      payload[columnName] = value;
+    }
+  });
+}
+
 function buildMileagePayloadForSchema({
   entries,
   workers,
@@ -5597,6 +5691,7 @@ function buildMileagePayloadForSchema({
   form,
   property,
   jobberVisit,
+  properties,
   sheetId,
 }) {
   const sampleEntry = (entries || []).find(Boolean) || {};
@@ -5607,6 +5702,7 @@ function buildMileagePayloadForSchema({
     form,
     property,
     jobberVisit,
+    properties,
   });
   const propertyDisplayValue = getMileagePropertyDisplayValue({
     form,
@@ -5720,6 +5816,14 @@ function buildMileagePayloadForSchema({
     value: form.status || "saved",
   });
 
+  setMileageWorkflowPayloadColumns({
+    payload,
+    sampleEntry,
+    hasSampleEntry,
+    form,
+    jobberVisit,
+  });
+
   setJobberMileagePayloadColumns({
     payload,
     sampleEntry,
@@ -5728,6 +5832,32 @@ function buildMileagePayloadForSchema({
   });
 
   return payload;
+}
+
+function setMileageWorkflowPayloadColumns({
+  payload,
+  sampleEntry,
+  hasSampleEntry,
+  form,
+  jobberVisit,
+}) {
+  const workflowColumns = buildMileageWorkflowFields({
+    jobberVisit,
+    vehicleName: form.vehicleName,
+    startOdometer: form.startOdometer,
+    purpose: form.purpose,
+  });
+
+  Object.entries(workflowColumns).forEach(([columnName, value]) => {
+    setMileagePayloadColumn({
+      payload,
+      sampleEntry,
+      hasSampleEntry,
+      candidates: [columnName],
+      fallback: columnName,
+      value,
+    });
+  });
 }
 
 function setJobberMileagePayloadColumns({
@@ -6277,7 +6407,13 @@ function slugify(value) {
     .replace(/(^-|-$)/g, "");
 }
 
-function downloadMileageCsv({ entries, workerMap, timesheetMap = new Map(), fileName }) {
+function downloadMileageCsv({
+  entries,
+  workerMap,
+  timesheetMap = new Map(),
+  properties = [],
+  fileName,
+}) {
   if (!entries || entries.length === 0) return;
 
   const headers = [
@@ -6302,6 +6438,8 @@ function downloadMileageCsv({ entries, workerMap, timesheetMap = new Map(), file
     "Jobber Link",
     "Normal Property",
     "Property Code",
+    "Mileage Bucket",
+    "Business Category",
     "Purpose",
     "Start Odometer",
     "End Odometer",
@@ -6334,7 +6472,9 @@ function downloadMileageCsv({ entries, workerMap, timesheetMap = new Map(), file
       entry.jobber_property_address || timesheet?.jobber_property_address || "",
       getJobberJobUrl(entry, timesheet),
       hasJobberMileage(entry) || entry.jobber_timesheet_id ? "" : getEntryPropertyDisplay(entry),
-      getEntryPropertyCode(entry),
+      getResolvedEntryPropertyCode(entry, timesheet, properties),
+      getMileageBucketLabelForEntry(entry, timesheet),
+      getBusinessCategoryLabelForEntry(entry, timesheet),
       getEntryPurpose(entry),
       getEntryStartOdometer(entry),
       getEntryEndOdometer(entry),
