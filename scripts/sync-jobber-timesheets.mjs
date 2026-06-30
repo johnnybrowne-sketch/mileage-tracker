@@ -145,9 +145,13 @@ async function syncJobberTimesheets() {
   });
 
   const entries = data?.timeSheetEntries?.nodes || [];
-  const rows = entries.map(mapTimeSheetEntryToRow);
+  const cancelledTimeEntryIds = await getCancelledTimeEntryIds();
+  const rows = entries
+    .map(mapTimeSheetEntryToRow)
+    .filter((row) => !cancelledTimeEntryIds.has(row.jobber_time_entry_id));
 
   console.log(`Timesheet entries found: ${entries.length}`);
+  console.log(`Cancelled in Mileage Tracker: ${cancelledTimeEntryIds.size}`);
   console.log(`Rows to sync: ${rows.length}`);
 
   if (rows.length === 0) {
@@ -165,6 +169,32 @@ async function syncJobberTimesheets() {
   }
 
   console.log(`Success. Synced ${rows.length} Jobber timesheets.`);
+}
+
+async function getCancelledTimeEntryIds() {
+  const { data, error } = await supabase
+    .from("jobber_timesheets")
+    .select("jobber_time_entry_id, is_cancelled, mileage_status")
+    .or("is_cancelled.eq.true,mileage_status.eq.cancelled");
+
+  if (!error) {
+    return new Set(
+      (data || [])
+        .map((row) => row.jobber_time_entry_id)
+        .filter(Boolean)
+    );
+  }
+
+  const message = String(error?.message || "").toLowerCase();
+
+  if (message.includes("is_cancelled") || message.includes("schema cache")) {
+    console.warn(
+      "Cancelled timesheet columns are not available yet. Run the Jobber timesheet cancel migration to keep removed timesheets from syncing again."
+    );
+    return new Set();
+  }
+
+  throw error;
 }
 
 syncJobberTimesheets().catch((error) => {

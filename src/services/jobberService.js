@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabaseClient";
+import { isTimesheetCancelled } from "./jobberTimesheetService";
 
 export function getMonthDateRange(monthKey) {
   const cleanMonthKey = String(monthKey || "").trim();
@@ -169,6 +170,7 @@ export async function getJobberVisitsForMonth(monthKey) {
 
   const visits = visitsResult.data || [];
   const timesheetVisits = (timesheetsResult.data || [])
+    .filter((timesheet) => !isTimesheetCancelled(timesheet))
     .filter((timesheet) => timesheet.jobber_job_id || timesheet.jobber_job_title)
     .map(mapTimesheetToVisit);
 

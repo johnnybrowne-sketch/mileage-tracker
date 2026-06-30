@@ -75,6 +75,7 @@ import {
   isActiveJob,
   isTimesheetMileageCompleted,
   mapTimesheetToMileageJobberFields,
+  removeJobberTimesheet,
 } from "../services/jobberTimesheetService";
 
 const logoPaths = [
@@ -167,6 +168,7 @@ export default function WorkerDashboard() {
     blankTimesheetMileageForm
   );
   const [savingTimesheetMileage, setSavingTimesheetMileage] = useState(false);
+  const [deletingTimesheetId, setDeletingTimesheetId] = useState("");
   const [timesheetError, setTimesheetError] = useState("");
   const [timesheetSuccess, setTimesheetSuccess] = useState("");
 
@@ -909,6 +911,53 @@ export default function WorkerDashboard() {
       setTimesheetError(error?.message || "Unable to complete timesheet mileage.");
     } finally {
       setSavingTimesheetMileage(false);
+    }
+  }
+
+  async function handleRemoveTimesheet(timesheet) {
+    if (!timesheet?.id || !profile?.id) {
+      setTimesheetError("Jobber timesheet or worker profile is missing.");
+      return;
+    }
+
+    const hasLinkedMileage =
+      isTimesheetMileageCompleted(timesheet) || timesheet.mileage_entry_id;
+    const confirmed = window.confirm(
+      hasLinkedMileage
+        ? "Remove this Jobber timesheet and its linked mileage entry? It will no longer appear in review, reports, or CSV downloads."
+        : "Remove this Jobber timesheet from Mileage Tracker review? It will no longer appear for worker or admin."
+    );
+
+    if (!confirmed) return;
+
+    setDeletingTimesheetId(timesheet.id);
+    setTimesheetError("");
+    setTimesheetSuccess("");
+
+    try {
+      await removeJobberTimesheet({
+        timesheetId: timesheet.id,
+        removedBy: profile.id,
+        removedByRole: "worker",
+        reason: "Worker removed this Jobber timesheet from Mileage Tracker review.",
+      });
+
+      await refreshAllWorkerData(profile.id, profile.email || user?.email || "");
+
+      if (String(timesheetMileageForm.timesheetId) === String(timesheet.id)) {
+        setTimesheetMileageForm(blankTimesheetMileageForm);
+      }
+
+      setTimesheetSuccess(
+        hasLinkedMileage
+          ? "Jobber timesheet and linked mileage entry removed from reports."
+          : "Jobber timesheet removed from Mileage Tracker review."
+      );
+    } catch (error) {
+      console.error(error);
+      setTimesheetError(error?.message || "Unable to remove Jobber timesheet.");
+    } finally {
+      setDeletingTimesheetId("");
     }
   }
 
@@ -1726,8 +1775,10 @@ export default function WorkerDashboard() {
                 updateMileageForm={updateTimesheetMileageForm}
                 openMileageForm={openTimesheetMileageForm}
                 closeMileageForm={closeTimesheetMileageForm}
+                onRemoveTimesheet={handleRemoveTimesheet}
                 onSubmitMileage={handleCompleteTimesheetMileage}
                 savingMileage={savingTimesheetMileage}
+                deletingTimesheetId={deletingTimesheetId}
                 error={timesheetError}
                 success={timesheetSuccess}
                 calculatedMiles={timesheetCalculatedMiles}
@@ -3242,8 +3293,10 @@ function WorkerTimesheetsView({
   updateMileageForm,
   openMileageForm,
   closeMileageForm,
+  onRemoveTimesheet,
   onSubmitMileage,
   savingMileage,
+  deletingTimesheetId,
   error,
   success,
   calculatedMiles,
@@ -3294,6 +3347,17 @@ function WorkerTimesheetsView({
             helper="Linked to mileage"
           />
         </div>
+
+        {!selectedTimesheet && error && (
+          <div className="mt-4">
+            <AlertBox type="error" message={error} />
+          </div>
+        )}
+        {!selectedTimesheet && success && (
+          <div className="mt-4">
+            <AlertBox type="success" message={success} />
+          </div>
+        )}
 
         {selectedTimesheet && (
           <form
@@ -3412,6 +3476,8 @@ function WorkerTimesheetsView({
                 key={timesheet.id}
                 timesheet={timesheet}
                 onAddMileage={openMileageForm}
+                onRemoveTimesheet={onRemoveTimesheet}
+                isRemoving={String(deletingTimesheetId) === String(timesheet.id)}
               />
             ))
           ) : (
@@ -3428,7 +3494,12 @@ function WorkerTimesheetsView({
   );
 }
 
-function TimesheetCard({ timesheet, onAddMileage }) {
+function TimesheetCard({
+  timesheet,
+  onAddMileage,
+  onRemoveTimesheet,
+  isRemoving = false,
+}) {
   const completed = isTimesheetMileageCompleted(timesheet);
   const jobberJobUrl = getJobberJobUrl({}, timesheet);
 
@@ -3451,15 +3522,27 @@ function TimesheetCard({ timesheet, onAddMileage }) {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => onAddMileage(timesheet)}
-          disabled={completed}
-          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:shadow-none"
-        >
-          <Route size={16} />
-          {completed ? "Completed" : "Add Mileage"}
-        </button>
+        <div className="flex flex-wrap gap-2 sm:justify-end">
+          <button
+            type="button"
+            onClick={() => onAddMileage(timesheet)}
+            disabled={completed || isRemoving}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:shadow-none"
+          >
+            <Route size={16} />
+            {completed ? "Completed" : "Add Mileage"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onRemoveTimesheet(timesheet)}
+            disabled={isRemoving}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-black text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Trash2 size={16} />
+            {isRemoving ? "Removing..." : "Remove"}
+          </button>
+        </div>
       </div>
 
       {timesheet.note && (

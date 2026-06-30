@@ -11,7 +11,7 @@ export async function getWorkerJobberTimesheets(workerEmail) {
 
   if (error) throw error;
 
-  return data || [];
+  return filterActiveJobberTimesheets(data);
 }
 
 export async function getAllJobberTimesheets() {
@@ -22,7 +22,7 @@ export async function getAllJobberTimesheets() {
 
   if (error) throw error;
 
-  return data || [];
+  return filterActiveJobberTimesheets(data);
 }
 
 export async function getJobberTimesheetById(timesheetId) {
@@ -36,7 +36,7 @@ export async function getJobberTimesheetById(timesheetId) {
 
   if (error) throw error;
 
-  return data;
+  return isTimesheetCancelled(data) ? null : data;
 }
 
 export async function getIncompleteJobberTimesheets(workerEmail = null) {
@@ -55,7 +55,66 @@ export async function getIncompleteJobberTimesheets(workerEmail = null) {
 
   if (error) throw error;
 
-  return data || [];
+  return filterActiveJobberTimesheets(data);
+}
+
+export async function removeJobberTimesheet({
+  timesheetId,
+  removedBy = "",
+  removedByRole = "worker",
+  reason = "Removed from Mileage Tracker review.",
+}) {
+  if (!timesheetId) {
+    throw new Error("Jobber timesheet is missing.");
+  }
+
+  const now = new Date().toISOString();
+
+  const { error: linkedMileageError } = await supabase
+    .from("mileage_entries")
+    .delete()
+    .eq("jobber_timesheet_id", timesheetId);
+
+  if (linkedMileageError) {
+    throw linkedMileageError;
+  }
+
+  const { data, error } = await supabase
+    .from("jobber_timesheets")
+    .update({
+      is_cancelled: true,
+      cancelled_at: now,
+      cancelled_by: removedBy || null,
+      cancelled_by_role: removedByRole || null,
+      cancel_reason: reason || null,
+      mileage_entry_id: null,
+      mileage_vehicle: null,
+      mileage_status: "cancelled",
+      mileage_completed_at: null,
+      updated_at: now,
+    })
+    .eq("id", timesheetId)
+    .select("id")
+    .maybeSingle();
+
+  if (!error) {
+    return data;
+  }
+
+  if (!isMissingCancelColumnsError(error)) {
+    throw error;
+  }
+
+  const { error: deleteError } = await supabase
+    .from("jobber_timesheets")
+    .delete()
+    .eq("id", timesheetId);
+
+  if (deleteError) {
+    throw deleteError;
+  }
+
+  return { id: timesheetId, deleted: true };
 }
 
 export function formatTimesheetDuration(minutes) {
@@ -100,6 +159,17 @@ export function getTimesheetDateInputValue(timesheet) {
 
 export function getTimesheetMileageStatus(timesheet) {
   return String(timesheet?.mileage_status || "needs_review").toLowerCase();
+}
+
+export function isTimesheetCancelled(timesheet) {
+  const status = getTimesheetMileageStatus(timesheet);
+
+  return Boolean(
+    status === "cancelled" ||
+      timesheet?.is_cancelled === true ||
+      String(timesheet?.is_cancelled || "").toLowerCase() === "true" ||
+      timesheet?.cancelled_at
+  );
 }
 
 export function isTimesheetMileageCompleted(timesheet) {
@@ -157,4 +227,29 @@ export function mapTimesheetToMileageJobberFields(timesheet) {
     jobberClientName: timesheet.jobber_client_name || null,
     jobberPropertyAddress: timesheet.jobber_property_address || null,
   };
+}
+
+function filterActiveJobberTimesheets(timesheets = []) {
+  return (timesheets || []).filter((timesheet) => !isTimesheetCancelled(timesheet));
+}
+
+function isMissingCancelColumnsError(error) {
+  const text = [
+    error?.code,
+    error?.message,
+    error?.details,
+    error?.hint,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    text.includes("is_cancelled") ||
+    text.includes("cancelled_at") ||
+    text.includes("cancelled_by") ||
+    text.includes("cancel_reason") ||
+    text.includes("schema cache") ||
+    text.includes("column")
+  );
 }
