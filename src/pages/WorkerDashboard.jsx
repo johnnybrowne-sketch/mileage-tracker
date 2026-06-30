@@ -1,4 +1,5 @@
 import JobberVisitPicker from "../components/JobberVisitPicker";
+import JohnnyChatShell from "../components/JohnnyChatShell";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -1356,17 +1357,32 @@ export default function WorkerDashboard() {
           return row;
         }
 
+        const cleanValue =
+          field === "property_code" ? String(value || "").toUpperCase() : value;
         const nextRow = {
           ...row,
-          [field]: value,
+          [field]: cleanValue,
         };
+
+        if (field === "property_code") {
+          const selectedProperty = findPropertyByCode(properties, cleanValue);
+
+          if (selectedProperty) {
+            nextRow.property_code = selectedProperty.property_code;
+            nextRow.property_text =
+              getPropertyAddressLabel(selectedProperty) ||
+              getPropertyDisplayLabel(selectedProperty);
+            nextRow.review_notes = removePropertyReviewNotes(nextRow.review_notes);
+            nextRow.needs_review = Boolean(nextRow.review_notes);
+          }
+        }
 
         if (field === "start_odometer" || field === "end_odometer") {
           const start = Number(
-            field === "start_odometer" ? value : nextRow.start_odometer
+            field === "start_odometer" ? cleanValue : nextRow.start_odometer
           );
           const end = Number(
-            field === "end_odometer" ? value : nextRow.end_odometer
+            field === "end_odometer" ? cleanValue : nextRow.end_odometer
           );
 
           if (!Number.isNaN(start) && !Number.isNaN(end) && end >= start) {
@@ -1794,6 +1810,7 @@ export default function WorkerDashboard() {
                 uploadSuccess={uploadSuccess}
                 draftEntries={paperDraftEntries}
                 properties={properties}
+                vehicles={vehicles}
                 convertingUploadId={convertingUploadId}
                 savingDraftUploadId={savingDraftUploadId}
                 submittingDraftUploadId={submittingDraftUploadId}
@@ -2150,79 +2167,14 @@ function AIWorkerHelpBot({ setActiveView, activeView, profile }) {
   }
 
   return (
-    <div className="fixed bottom-5 right-5 z-50">
-      {isOpen && (
-        <div className="mb-4 flex h-[520px] w-[370px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[2rem] bg-white shadow-2xl shadow-slate-400/30 ring-1 ring-slate-200">
-          <div className="prosper-hero-gradient flex items-center justify-between gap-4 p-4 text-white">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="shrink-0 rounded-2xl bg-white/15 p-3">
-                <Bot size={22} />
-              </div>
-
-              <div className="min-w-0">
-                <p className="truncate text-sm font-black">
-                  Mileage Help Assistant
-                </p>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setIsOpen(false)}
-              className="rounded-xl bg-white/10 p-2 transition hover:bg-white/20"
-              aria-label="Close help assistant"
-            >
-              <X size={18} />
-            </button>
-          </div>
-
-          <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
-            {messages.map((message, index) => {
-              const isUser = message.sender === "user";
-
-              return (
-                <div
-                  key={index}
-                  className={isUser ? "flex justify-end" : "flex justify-start"}
-                >
-                  <div
-                    className={
-                      "max-w-[88%] rounded-3xl px-4 py-3 text-sm font-semibold leading-6 " +
-                      (isUser
-                        ? "bg-blue-600 text-white"
-                        : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200")
-                    }
-                  >
-                    <p>{message.text}</p>
-
-                    {!isUser && message.actions?.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {message.actions.map((action) => (
-                          <button
-                            key={action.label}
-                            type="button"
-                            onClick={() => handleBotAction(action)}
-                            className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700 transition hover:bg-blue-100"
-                          >
-                            {action.label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            {isThinking && (
-              <div className="flex justify-start">
-                <div className="max-w-[88%] rounded-3xl bg-white px-4 py-3 text-sm font-semibold leading-6 text-slate-500 shadow-sm ring-1 ring-slate-200">
-                  Johnny is thinking...
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="border-t border-slate-200 bg-white p-3">
+    <JohnnyChatShell
+      isOpen={isOpen}
+      setIsOpen={setIsOpen}
+      title="Johnny Assistant"
+      launcherClassName="bg-blue-600 hover:bg-blue-700"
+      closeAriaLabel="Close help assistant"
+      sendArea={
+        <div className="border-t border-slate-200 bg-white p-3">
             <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
               {quickPrompts.map((prompt) => (
                 <button
@@ -2260,19 +2212,55 @@ function AIWorkerHelpBot({ setActiveView, activeView, profile }) {
                 <Send size={18} />
               </button>
             </form>
-          </div>
         </div>
-      )}
+      }
+    >
+      <div className="h-full space-y-3 overflow-y-auto bg-slate-50 p-4">
+        {messages.map((message, index) => {
+          const isUser = message.sender === "user";
 
-      <button
-        type="button"
-        onClick={() => setIsOpen((current) => !current)}
-        className="flex items-center gap-3 rounded-full bg-blue-600 px-5 py-4 text-sm font-black text-white shadow-2xl shadow-blue-300 transition hover:-translate-y-0.5 hover:bg-blue-700"
-      >
-        <Bot size={22} />
-        {isOpen ? "Close Help" : "Need Help?"}
-      </button>
-    </div>
+          return (
+            <div
+              key={index}
+              className={isUser ? "flex justify-end" : "flex justify-start"}
+            >
+              <div
+                className={
+                  "max-w-[88%] rounded-3xl px-4 py-3 text-sm font-semibold leading-6 " +
+                  (isUser
+                    ? "bg-blue-600 text-white"
+                    : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200")
+                }
+              >
+                <p>{message.text}</p>
+
+                {!isUser && message.actions?.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {message.actions.map((action) => (
+                      <button
+                        key={action.label}
+                        type="button"
+                        onClick={() => handleBotAction(action)}
+                        className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700 transition hover:bg-blue-100"
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {isThinking && (
+          <div className="flex justify-start">
+            <div className="max-w-[88%] rounded-3xl bg-white px-4 py-3 text-sm font-semibold leading-6 text-slate-500 shadow-sm ring-1 ring-slate-200">
+              Johnny is thinking...
+            </div>
+          </div>
+        )}
+      </div>
+    </JohnnyChatShell>
   );
 }
 
@@ -3744,6 +3732,7 @@ function UploadSheetView({
   uploadSuccess,
   draftEntries,
   properties,
+  vehicles,
   convertingUploadId,
   savingDraftUploadId,
   submittingDraftUploadId,
@@ -3758,6 +3747,16 @@ function UploadSheetView({
   onSaveDraftRows,
   onSubmitDraftEntries,
 }) {
+  const draftVehicleOptions = useMemo(() => {
+    return Array.from(
+      new Set(
+        (vehicles || [])
+          .map((vehicle) => getWorkerVehicleDisplayName(vehicle, profile))
+          .filter(Boolean)
+      )
+    );
+  }, [vehicles, profile]);
+
   return (
     <section className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
       <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
@@ -4018,6 +4017,12 @@ function UploadSheetView({
                         ))}
                       </datalist>
 
+                      <datalist id="paper-draft-vehicle-options">
+                        {draftVehicleOptions.map((vehicleName) => (
+                          <option key={vehicleName} value={vehicleName} />
+                        ))}
+                      </datalist>
+
                       {rowsNeedingReview.length > 0 && !isSubmitted && (
                         <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold leading-6 text-red-700">
                           AI marked {rowsNeedingReview.length} row
@@ -4033,8 +4038,8 @@ function UploadSheetView({
                               <TableHeader>Entry #</TableHeader>
                               <TableHeader>Date</TableHeader>
                               <TableHeader>Vehicle</TableHeader>
-                              <TableHeader>Property Text</TableHeader>
                               <TableHeader>Property Code</TableHeader>
+                              <TableHeader>Property Address</TableHeader>
                               <TableHeader>Start Odo</TableHeader>
                               <TableHeader>Ending Odo</TableHeader>
                               <TableHeader>Miles</TableHeader>
@@ -4074,24 +4079,14 @@ function UploadSheetView({
                                 <td className="px-3 py-3">
                                   <input
                                     type="text"
+                                    list="paper-draft-vehicle-options"
                                     value={row.vehicle || ""}
                                     disabled={isSubmitted}
                                     onChange={(event) =>
                                       onUpdateDraftEntry(row.id, "vehicle", event.target.value)
                                     }
+                                    placeholder="Select vehicle"
                                     className="w-44 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                                  />
-                                </td>
-
-                                <td className="px-3 py-3">
-                                  <input
-                                    type="text"
-                                    value={row.property_text || ""}
-                                    disabled={isSubmitted}
-                                    onChange={(event) =>
-                                      onUpdateDraftEntry(row.id, "property_text", event.target.value)
-                                    }
-                                    className="w-64 rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                                   />
                                 </td>
 
@@ -4105,7 +4100,20 @@ function UploadSheetView({
                                       onUpdateDraftEntry(row.id, "property_code", event.target.value)
                                     }
                                     placeholder="Select code"
-                                    className="w-44 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                    className="w-44 rounded-xl border border-slate-200 px-3 py-2 font-bold uppercase outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                  />
+                                </td>
+
+                                <td className="px-3 py-3">
+                                  <input
+                                    type="text"
+                                    value={row.property_text || ""}
+                                    disabled={isSubmitted}
+                                    onChange={(event) =>
+                                      onUpdateDraftEntry(row.id, "property_text", event.target.value)
+                                    }
+                                    placeholder="Property address"
+                                    className="w-72 rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                                   />
                                 </td>
 
@@ -5411,6 +5419,60 @@ function getPropertyDisplayLabel(property) {
   }
 
   return property.property_code || "";
+}
+
+function getPropertyAddressLabel(property) {
+  if (!property) {
+    return "";
+  }
+
+  const address = [
+    property.house_number,
+    property.street_name,
+    property.street_type,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  if (address && property.city) {
+    return `${address}, ${property.city}`;
+  }
+
+  return address || property.display_name || property.display_label || "";
+}
+
+function findPropertyByCode(properties, propertyCode) {
+  const normalizedCode = String(propertyCode || "").trim().toUpperCase();
+
+  if (!normalizedCode) {
+    return null;
+  }
+
+  return (
+    (properties || []).find((property) => {
+      return (
+        String(property.property_code || "").trim().toUpperCase() ===
+        normalizedCode
+      );
+    }) || null
+  );
+}
+
+function removePropertyReviewNotes(reviewNotes) {
+  return String(reviewNotes || "")
+    .split(";")
+    .map((note) => note.trim())
+    .filter(Boolean)
+    .filter((note) => {
+      const lowerNote = note.toLowerCase();
+      return (
+        !lowerNote.includes("property") &&
+        !lowerNote.includes("reference list") &&
+        !lowerNote.includes("could not match")
+      );
+    })
+    .join("; ");
 }
 
 function buildWorkerMileageEntryUpdatePayload({

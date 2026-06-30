@@ -1,10 +1,10 @@
 import JobberVisitPicker from "../components/JobberVisitPicker";
+import JohnnyChatShell from "../components/JohnnyChatShell";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   BadgeCheck,
   BarChart3,
-  Bot,
   CalendarDays,
   Car,
   ClipboardList,
@@ -2219,6 +2219,7 @@ export default function AdminDashboard() {
                 error={paperUploadError}
                 success={paperUploadSuccess}
                 draftEntries={paperDraftEntries}
+                properties={properties}
                 selectedUploadId={selectedPaperUploadId}
                 setSelectedUploadId={setSelectedPaperUploadId}
                 convertingUploadId={convertingPaperUploadId}
@@ -2425,75 +2426,14 @@ function AIAdminHelpBot({ setActiveView, activeView, profile }) {
   }
 
   return (
-    <div className="fixed bottom-5 right-5 z-50">
-      {isOpen && (
-        <div className="mb-4 flex h-[520px] w-[370px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[2rem] bg-white shadow-2xl shadow-slate-400/30 ring-1 ring-slate-200">
-          <div className="prosper-hero-gradient flex items-center justify-between gap-4 p-4 text-white">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="shrink-0 rounded-2xl bg-white/15 p-3">
-                <Bot size={22} />
-              </div>
-              <p className="truncate text-sm font-black">
-                Johnny Assistant
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setIsOpen(false)}
-              className="rounded-xl bg-white/10 p-2 transition hover:bg-white/20"
-              aria-label="Close admin help assistant"
-            >
-              <X size={18} />
-            </button>
-          </div>
-
-          <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
-            {messages.map((message, index) => {
-              const isUser = message.sender === "user";
-
-              return (
-                <div
-                  key={index}
-                  className={isUser ? "flex justify-end" : "flex justify-start"}
-                >
-                  <div
-                    className={
-                      "max-w-[88%] rounded-3xl px-4 py-3 text-sm font-semibold leading-6 " +
-                      (isUser
-                        ? "bg-[#2f8fc8] text-white"
-                        : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200")
-                    }
-                  >
-                    <p>{message.text}</p>
-                    {!isUser && message.actions?.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {message.actions.map((action) => (
-                          <button
-                            key={action.label}
-                            type="button"
-                            onClick={() => handleAction(action)}
-                            className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700 transition hover:bg-blue-100"
-                          >
-                            {action.label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            {isThinking && (
-              <div className="flex justify-start">
-                <div className="rounded-3xl bg-white px-4 py-3 text-sm font-semibold text-slate-500 shadow-sm ring-1 ring-slate-200">
-                  Johnny is thinking...
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="border-t border-slate-200 bg-white p-3">
+    <JohnnyChatShell
+      isOpen={isOpen}
+      setIsOpen={setIsOpen}
+      title="Johnny Assistant"
+      launcherClassName="bg-[#2f8fc8] hover:bg-[#1f6f9f]"
+      closeAriaLabel="Close admin help assistant"
+      sendArea={
+        <div className="border-t border-slate-200 bg-white p-3">
             <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
               {quickPrompts.map((prompt) => (
                 <button
@@ -2530,19 +2470,54 @@ function AIAdminHelpBot({ setActiveView, activeView, profile }) {
                 <Send size={18} />
               </button>
             </form>
-          </div>
         </div>
-      )}
+      }
+    >
+      <div className="h-full space-y-3 overflow-y-auto bg-slate-50 p-4">
+        {messages.map((message, index) => {
+          const isUser = message.sender === "user";
 
-      <button
-        type="button"
-        onClick={() => setIsOpen((current) => !current)}
-        className="flex items-center gap-3 rounded-full bg-[#2f8fc8] px-5 py-4 text-sm font-black text-white shadow-2xl shadow-blue-300 transition hover:-translate-y-0.5 hover:bg-[#1f6f9f]"
-      >
-        <Bot size={22} />
-        {isOpen ? "Close Help" : "Need Help?"}
-      </button>
-    </div>
+          return (
+            <div
+              key={index}
+              className={isUser ? "flex justify-end" : "flex justify-start"}
+            >
+              <div
+                className={
+                  "max-w-[88%] rounded-3xl px-4 py-3 text-sm font-semibold leading-6 " +
+                  (isUser
+                    ? "bg-[#2f8fc8] text-white"
+                    : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200")
+                }
+              >
+                <p>{message.text}</p>
+                {!isUser && message.actions?.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {message.actions.map((action) => (
+                      <button
+                        key={action.label}
+                        type="button"
+                        onClick={() => handleAction(action)}
+                        className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700 transition hover:bg-blue-100"
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {isThinking && (
+          <div className="flex justify-start">
+            <div className="rounded-3xl bg-white px-4 py-3 text-sm font-semibold text-slate-500 shadow-sm ring-1 ring-slate-200">
+              Johnny is thinking...
+            </div>
+          </div>
+        )}
+      </div>
+    </JohnnyChatShell>
   );
 }
 
@@ -4267,6 +4242,7 @@ function PaperSheetsReviewView({
   error,
   success,
   draftEntries,
+  properties,
   selectedUploadId,
   setSelectedUploadId,
   convertingUploadId,
@@ -4705,8 +4681,8 @@ function PaperSheetsReviewView({
                   <TableHeader>Entry #</TableHeader>
                   <TableHeader>Date</TableHeader>
                   <TableHeader>Vehicle</TableHeader>
-                  <TableHeader>Property Text</TableHeader>
                   <TableHeader>Property Code</TableHeader>
+                  <TableHeader>Property Address</TableHeader>
                   <TableHeader>Start Odo</TableHeader>
                   <TableHeader>Ending Odo</TableHeader>
                   <TableHeader>Miles</TableHeader>
@@ -4728,11 +4704,11 @@ function PaperSheetsReviewView({
                       <td className="px-4 py-4 text-slate-700">
                         {row.vehicle || "—"}
                       </td>
-                      <td className="max-w-[240px] px-4 py-4 text-slate-700">
-                        {row.property_text || "—"}
-                      </td>
                       <td className="px-4 py-4 font-black text-slate-950">
                         {row.property_code || "—"}
+                      </td>
+                      <td className="max-w-[280px] px-4 py-4 text-slate-700">
+                        {getDraftRowPropertyAddress(row, properties)}
                       </td>
                       <td className="px-4 py-4 text-slate-700">
                         {row.start_odometer || "—"}
@@ -6242,6 +6218,51 @@ function getPropertyDisplayLabel(property) {
   }
 
   return property.property_code || "";
+}
+
+function getPropertyAddressLabel(property) {
+  if (!property) return "";
+
+  const address = [
+    property.house_number,
+    property.street_name,
+    property.street_type,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  if (address && property.city) {
+    return `${address}, ${property.city}`;
+  }
+
+  return address || property.display_name || property.display_label || "";
+}
+
+function findPropertyByCode(properties, propertyCode) {
+  const normalizedCode = String(propertyCode || "").trim().toUpperCase();
+
+  if (!normalizedCode) return null;
+
+  return (
+    (properties || []).find((property) => {
+      return (
+        String(property.property_code || "").trim().toUpperCase() ===
+        normalizedCode
+      );
+    }) || null
+  );
+}
+
+function getDraftRowPropertyAddress(row, properties) {
+  const matchedProperty = findPropertyByCode(properties, row?.property_code);
+
+  return (
+    getPropertyAddressLabel(matchedProperty) ||
+    row?.property_text ||
+    row?.property_code ||
+    "—"
+  );
 }
 
 function getMileageSummary(entryRows) {
