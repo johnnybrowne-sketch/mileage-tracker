@@ -3,7 +3,7 @@ import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
-const DEFAULT_MODEL = "claude-sonnet-4-20250514";
+const DEFAULT_MODEL = "claude-sonnet-4-6";
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
@@ -109,7 +109,7 @@ Deno.serve(async (request) => {
         status: "reviewing",
         total_mileage_detected: totalMileage,
         ai_error: needsReview
-          ? "Claude found one or more rows that need review before submitting."
+          ? "AI scan found one or more rows that need review before submitting."
           : null,
         ai_provider: "claude",
         ai_model: model,
@@ -262,7 +262,7 @@ ${propertyReference || "No property reference rows were available."}
 
   if (!response.ok || json.error) {
     console.error(JSON.stringify(json, null, 2));
-    throw new Error(json.error?.message || "Claude paper sheet scan failed.");
+    throw new Error(json.error?.message || "AI paper sheet scan failed.");
   }
 
   const text = (json.content || [])
@@ -304,7 +304,7 @@ function buildClaudeFileBlock({
   }
 
   throw new Error(
-    "Claude scanning currently supports PDF, JPG, PNG, and WEBP mileage sheets."
+    "AI scanning currently supports PDF, JPG, PNG, and WEBP mileage sheets."
   );
 }
 
@@ -441,7 +441,7 @@ function parseClaudeJson(text: string) {
   const lastBrace = cleanText.lastIndexOf("}");
 
   if (firstBrace === -1 || lastBrace === -1) {
-    throw new Error("Claude did not return JSON for the paper sheet scan.");
+    throw new Error("AI scan did not return JSON for the paper sheet scan.");
   }
 
   return JSON.parse(cleanText.slice(firstBrace, lastBrace + 1));

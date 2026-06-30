@@ -31,6 +31,7 @@ import {
 
 import { supabase } from "../lib/supabaseClient";
 import { askClaudeAssistant } from "../services/claudeAssistantService";
+import { invokeSupabaseFunction } from "../services/supabaseFunctionService";
 import { signOutUser } from "../services/authService";
 import { getProfileForUser } from "../services/profileService";
 import { saveWorkerMileageEntry } from "../services/mileageService";
@@ -1831,7 +1832,7 @@ export default function AdminDashboard() {
       setPaperUploadSuccess(
         "Paper sheet uploaded for " +
           (worker.full_name || worker.email || "selected worker") +
-          ". You can scan it with Claude or review it manually."
+          ". You can scan it with AI or review it manually."
       );
 
       const fileInput = document.getElementById("admin-paper-sheet-file-input");
@@ -1857,30 +1858,21 @@ export default function AdminDashboard() {
     setPaperUploadSuccess("");
 
     try {
-      const { data, error } = await supabase.functions.invoke(
-        "convert-paper-sheet",
-        {
-          body: {
-            uploadId: upload.id,
-          },
-        }
-      );
-
-      if (error) throw error;
-
-      if (data?.error) {
-        throw new Error(data.error);
-      }
+      await invokeSupabaseFunction("convert-paper-sheet", {
+        body: {
+          uploadId: upload.id,
+        },
+      });
 
       await Promise.all([refreshPaperUploads(), refreshPaperDraftEntries()]);
 
       setSelectedPaperUploadId(upload.id);
-      setPaperUploadSuccess("Claude scan finished. Draft rows are ready for review. The original uploaded document remains available for manual admin review.");
+      setPaperUploadSuccess("AI scan finished. Draft rows are ready for review. The original uploaded document remains available for manual admin review.");
     } catch (error) {
       console.error(error);
       setPaperUploadError(
         error?.message ||
-          "Claude scan failed. Please check the Edge Function logs."
+          "AI scan failed. Please check the Edge Function logs."
       );
     } finally {
       setConvertingPaperUploadId("");
@@ -2297,7 +2289,7 @@ function AIAdminHelpBot({ setActiveView, activeView, profile }) {
     {
       sender: "bot",
       text:
-        "Hi! I am your Claude-powered Admin Help Assistant. Ask me about reviewing mileage, Jobber timesheets, paper sheets, reports, messages, settings, or general questions.",
+        "Hi, my name is Johnny. I can help with admin mileage review, Jobber timesheets, paper sheets, reports, messages, settings, or general questions.",
       actions: [
         { label: "Mileage Review", view: "mileage" },
         { label: "Paper Sheets", view: "paper-sheets" },
@@ -2316,10 +2308,28 @@ function AIAdminHelpBot({ setActiveView, activeView, profile }) {
   function getFallbackReply(userText) {
     const text = String(userText || "").toLowerCase();
 
+    if (
+      text === "hi" ||
+      text === "hello" ||
+      text === "hey" ||
+      text === "how are you" ||
+      text.includes("how are you")
+    ) {
+      return {
+        text:
+          "Hey, I am doing good. Thanks for asking. What are we working on today? I can help with the app, reports, paper sheets, Jobber records, or a general question.",
+        actions: [
+          { label: "Mileage Review", view: "mileage" },
+          { label: "Paper Sheets", view: "paper-sheets" },
+          { label: "Reports", view: "reports" },
+        ],
+      };
+    }
+
     if (text.includes("paper") || text.includes("scan") || text.includes("upload")) {
       return {
         text:
-          "Go to Paper Sheets. Use Admin Upload to select the worker and file, then click Scan With Claude. Review any red notes before the worker submits final entries.",
+          "Go to Paper Sheets. Use Admin Upload to select the worker and file, then click Scan With AI. Review any red notes before the worker submits final entries.",
         actions: [{ label: "Paper Sheets", view: "paper-sheets" }],
       };
     }
@@ -2394,7 +2404,7 @@ function AIAdminHelpBot({ setActiveView, activeView, profile }) {
         },
       ]);
     } catch (error) {
-      console.warn("Claude admin assistant unavailable; using local fallback.", error);
+      console.warn("Johnny admin assistant unavailable; using local fallback.", error);
       setMessages((currentMessages) => [
         ...currentMessages,
         {
@@ -2424,7 +2434,7 @@ function AIAdminHelpBot({ setActiveView, activeView, profile }) {
                 <Bot size={22} />
               </div>
               <p className="truncate text-sm font-black">
-                Admin Claude Assistant
+                Johnny Assistant
               </p>
             </div>
 
@@ -2477,7 +2487,7 @@ function AIAdminHelpBot({ setActiveView, activeView, profile }) {
             {isThinking && (
               <div className="flex justify-start">
                 <div className="rounded-3xl bg-white px-4 py-3 text-sm font-semibold text-slate-500 shadow-sm ring-1 ring-slate-200">
-                  Claude is thinking...
+                  Johnny is thinking...
                 </div>
               </div>
             )}
@@ -2508,7 +2518,7 @@ function AIAdminHelpBot({ setActiveView, activeView, profile }) {
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 disabled={isThinking}
-                placeholder="Ask Claude for help..."
+                placeholder="Ask Johnny for help..."
                 className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
               />
               <button
@@ -4297,7 +4307,7 @@ function PaperSheetsReviewView({
           <SectionTitle
             eyebrow="Paper Sheets"
             title="Uploaded Mileage Sheets"
-            text="Review worker-uploaded paper mileage sheets, upload a sheet for a selected worker, scan with Claude, and check draft rows before workers submit them."
+            text="Review worker-uploaded paper mileage sheets, upload a sheet for a selected worker, scan with AI, and check draft rows before workers submit them."
           />
 
           <div className="inline-flex h-12 items-center gap-2 rounded-2xl bg-blue-50 px-4 text-sm font-black text-blue-700">
@@ -4337,7 +4347,7 @@ function PaperSheetsReviewView({
             <SectionTitle
               eyebrow="Admin Upload"
               title="Upload Paper Sheet For Worker"
-              text="Choose the worker, mileage month, and paper sheet file. The worker will see the upload and can edit Claude draft rows before submitting."
+              text="Choose the worker, mileage month, and paper sheet file. The worker will see the upload and can edit AI draft rows before submitting."
               titleClassName="text-xl"
             />
 
@@ -4612,7 +4622,7 @@ function PaperSheetsReviewView({
                               onClick={() => onConvertUpload(upload)}
                               className="inline-flex items-center gap-2 rounded-xl bg-violet-50 px-3 py-2 text-xs font-black text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                              {isConverting ? "Scanning..." : "Scan With Claude"}
+                              {isConverting ? "Scanning..." : "Scan With AI"}
                             </button>
 
                             <button
@@ -4657,9 +4667,9 @@ function PaperSheetsReviewView({
         <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200 xl:p-8">
           <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
             <SectionTitle
-              eyebrow="Claude Draft Rows"
+              eyebrow="AI Draft Rows"
               title={selectedUpload.file_name}
-              text="These are the rows extracted by Claude. Workers can edit and submit these as final mileage entries from their dashboard."
+              text="These are the rows extracted by AI. Workers can edit and submit these as final mileage entries from their dashboard."
             />
 
             <button
@@ -4768,7 +4778,7 @@ function PaperSheetsReviewView({
                     <td colSpan="10" className="px-6 py-12">
                       <EmptyState
                         title="No Draft Rows Yet"
-                        text="Open the uploaded document for manual review, or scan it with Claude when ready."
+                        text="Open the uploaded document for manual review, or scan it with AI when ready."
                       />
                     </td>
                   </tr>
@@ -4801,7 +4811,7 @@ function AiStatusBadge({ status }) {
         (statusClasses[cleanStatus] || statusClasses.not_started)
       }
     >
-      Claude: {cleanStatus.replaceAll("_", " ")}
+      AI: {cleanStatus.replaceAll("_", " ")}
     </span>
   );
 }

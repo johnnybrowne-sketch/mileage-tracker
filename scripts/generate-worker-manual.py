@@ -262,7 +262,7 @@ def build_manual():
         ("New Mileage Entry", "Use this for daily mileage. Add date, vehicle, Jobber job or property, odometer readings, purpose, and note."),
         ("Timesheets", "Review synced Jobber time records and add mileage to timesheets that involved driving."),
         ("Mileage History", "Review saved entries, edit corrections when allowed, and download a CSV for the selected month."),
-        ("Upload Paper Sheet", "Upload a JPG, PNG, WEBP, or PDF paper mileage sheet. Claude scanning can turn it into editable draft rows."),
+        ("Upload Paper Sheet", "Upload a JPG, PNG, WEBP, or PDF paper mileage sheet. AI scanning can turn it into editable draft rows."),
         ("Messages", "Chat with admin about missing vehicles, property questions, paper sheets, and corrections."),
         ("Help", "Open this manual, use help cards, and search routes with Google Maps."),
     ]))
@@ -376,8 +376,8 @@ def build_manual():
     ]))
 
     story.append(PageBreak())
-    story += section("12. Paper Sheets And Claude Draft Rows")
-    story.append(p("Use Upload Paper Sheet when mileage was written on a paper form or needs manual review. Uploads go to admin immediately. Claude scanning can create editable draft rows from the uploaded sheet."))
+    story += section("12. Paper Sheets And AI Draft Rows")
+    story.append(p("Use Upload Paper Sheet when mileage was written on a paper form or needs manual review. Uploads go to admin immediately. AI scanning can create editable draft rows from the uploaded sheet."))
     story.append(numbered([
         "Open Upload Paper Sheet.",
         "Choose a clear JPG, PNG, WEBP, or PDF file up to 10 MB.",
@@ -385,12 +385,12 @@ def build_manual():
         "Add notes for admin, especially if a row is circled or hard to read.",
         "Click Upload Paper Sheet.",
         "In Upload History, click Open to view the file when needed.",
-        "Use Scan With Claude to create editable draft rows.",
+        "Use Scan With AI to create editable draft rows.",
         "Review every draft row: date, vehicle, property text, property code, start odometer, end odometer, miles, and purpose.",
         "Use Save Draft while correcting rows.",
         "Click Submit Entries only after every row is accurate.",
     ]))
-    story.append(callout("Claude draft rows are a helper, not a final answer. Always review and correct them before submitting.", AMBER))
+    story.append(callout("AI draft rows are a helper, not a final answer. Always review and correct them before submitting.", AMBER))
 
     story += section("13. Messages, Help, And Map Search")
     story.append(feature_table([

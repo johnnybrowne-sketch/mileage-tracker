@@ -1,4 +1,4 @@
-import { supabase } from "../lib/supabaseClient";
+import { invokeSupabaseFunction } from "./supabaseFunctionService";
 
 export async function askClaudeAssistant({
   message,
@@ -21,7 +21,7 @@ export async function askClaudeAssistant({
       text: String(item.text || "").slice(0, 1200),
     }));
 
-  const { data, error } = await supabase.functions.invoke("ai-chat", {
+  const data = await invokeSupabaseFunction("ai-chat", {
     body: {
       message: cleanMessage,
       history: safeHistory,
@@ -35,14 +35,6 @@ export async function askClaudeAssistant({
         : null,
     },
   });
-
-  if (error) {
-    throw error;
-  }
-
-  if (data?.error) {
-    throw new Error(data.error);
-  }
 
   return {
     text: String(data?.reply || "").trim(),
