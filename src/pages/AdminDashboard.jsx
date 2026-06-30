@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
   BadgeCheck,
   BarChart3,
+  Bot,
   CalendarDays,
   Car,
   ClipboardList,
@@ -29,6 +30,7 @@ import {
 } from "lucide-react";
 
 import { supabase } from "../lib/supabaseClient";
+import { askClaudeAssistant } from "../services/claudeAssistantService";
 import { signOutUser } from "../services/authService";
 import { getProfileForUser } from "../services/profileService";
 import { saveWorkerMileageEntry } from "../services/mileageService";
@@ -213,6 +215,12 @@ export default function AdminDashboard() {
   const [uploadSearchTerm, setUploadSearchTerm] = useState("");
   const [uploadAdminNotes, setUploadAdminNotes] = useState({});
   const [updatingUploadId, setUpdatingUploadId] = useState("");
+  const [adminUploadWorkerId, setAdminUploadWorkerId] = useState("");
+  const [adminUploadMonthKey, setAdminUploadMonthKey] = useState(getCurrentMonthKey());
+  const [adminUploadNotes, setAdminUploadNotes] = useState("");
+  const [adminUploadFile, setAdminUploadFile] = useState(null);
+  const [uploadingPaperSheetAsAdmin, setUploadingPaperSheetAsAdmin] =
+    useState(false);
   const [paperUploadError, setPaperUploadError] = useState("");
   const [paperUploadSuccess, setPaperUploadSuccess] = useState("");
 
@@ -1733,6 +1741,111 @@ export default function AdminDashboard() {
     return data || [];
   }
 
+  function handleAdminPaperSheetFileChange(event) {
+    const file = event.target.files?.[0] || null;
+
+    setPaperUploadError("");
+    setPaperUploadSuccess("");
+
+    if (!file) {
+      setAdminUploadFile(null);
+      return;
+    }
+
+    if (!isAllowedPaperSheetFile(file)) {
+      setAdminUploadFile(null);
+      setPaperUploadError("Please choose a JPG, PNG, WEBP, or PDF mileage sheet.");
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setAdminUploadFile(null);
+      setPaperUploadError("Paper sheet file must be 10 MB or smaller.");
+      return;
+    }
+
+    setAdminUploadFile(file);
+  }
+
+  async function handleUploadPaperSheetAsAdmin(event) {
+    event.preventDefault();
+
+    const worker = driverWorkers.find((item) => {
+      return String(item.id) === String(adminUploadWorkerId);
+    });
+
+    if (!worker) {
+      setPaperUploadError("Please select the worker this paper sheet belongs to.");
+      return;
+    }
+
+    if (!adminUploadFile) {
+      setPaperUploadError("Please choose a paper sheet file.");
+      return;
+    }
+
+    setUploadingPaperSheetAsAdmin(true);
+    setPaperUploadError("");
+    setPaperUploadSuccess("");
+
+    try {
+      const filePath = `${worker.id}/${Date.now()}-${sanitizeFileName(
+        adminUploadFile.name
+      )}`;
+
+      const { error: uploadStorageError } = await supabase.storage
+        .from("paper-sheets")
+        .upload(filePath, adminUploadFile, {
+          cacheControl: "3600",
+          upsert: false,
+          contentType: adminUploadFile.type || undefined,
+        });
+
+      if (uploadStorageError) throw uploadStorageError;
+
+      const { data: insertedUpload, error: insertError } = await supabase
+        .from("paper_sheet_uploads")
+        .insert({
+          worker_id: worker.id,
+          file_name: adminUploadFile.name,
+          file_path: filePath,
+          file_type: adminUploadFile.type || "",
+          file_size: adminUploadFile.size || 0,
+          month_key: adminUploadMonthKey,
+          notes: adminUploadNotes.trim(),
+          admin_notes: "Uploaded by admin.",
+          status: "uploaded",
+        })
+        .select("*")
+        .single();
+
+      if (insertError) throw insertError;
+
+      await refreshPaperUploads();
+
+      setSelectedPaperUploadId(insertedUpload?.id || "");
+      setAdminUploadFile(null);
+      setAdminUploadNotes("");
+      setAdminUploadMonthKey(getCurrentMonthKey());
+      setAdminUploadWorkerId(worker.id);
+      setPaperUploadSuccess(
+        "Paper sheet uploaded for " +
+          (worker.full_name || worker.email || "selected worker") +
+          ". You can scan it with Claude or review it manually."
+      );
+
+      const fileInput = document.getElementById("admin-paper-sheet-file-input");
+      if (fileInput) fileInput.value = "";
+    } catch (error) {
+      console.error(error);
+      setPaperUploadError(
+        getFriendlySupabaseError(error, "Unable to upload paper sheet for worker.")
+      );
+    } finally {
+      setUploadingPaperSheetAsAdmin(false);
+    }
+  }
+
   async function handleConvertPaperUploadAsAdmin(upload) {
     if (!upload?.id) {
       setPaperUploadError("Upload is missing.");
@@ -1762,12 +1875,12 @@ export default function AdminDashboard() {
       await Promise.all([refreshPaperUploads(), refreshPaperDraftEntries()]);
 
       setSelectedPaperUploadId(upload.id);
-      setPaperUploadSuccess("AI conversion finished. Draft rows are ready for review. The original uploaded document remains available for manual admin review.");
+      setPaperUploadSuccess("Claude scan finished. Draft rows are ready for review. The original uploaded document remains available for manual admin review.");
     } catch (error) {
       console.error(error);
       setPaperUploadError(
         error?.message ||
-          "AI conversion failed. Please check the Edge Function logs."
+          "Claude scan failed. Please check the Edge Function logs."
       );
     } finally {
       setConvertingPaperUploadId("");
@@ -2098,6 +2211,16 @@ export default function AdminDashboard() {
                 setWorkerFilter={setUploadWorkerFilter}
                 searchTerm={uploadSearchTerm}
                 setSearchTerm={setUploadSearchTerm}
+                uploadWorkerId={adminUploadWorkerId}
+                setUploadWorkerId={setAdminUploadWorkerId}
+                uploadMonthKey={adminUploadMonthKey}
+                setUploadMonthKey={setAdminUploadMonthKey}
+                uploadNotes={adminUploadNotes}
+                setUploadNotes={setAdminUploadNotes}
+                uploadFile={adminUploadFile}
+                onFileChange={handleAdminPaperSheetFileChange}
+                onUploadPaperSheet={handleUploadPaperSheetAsAdmin}
+                uploadingPaperSheet={uploadingPaperSheetAsAdmin}
                 adminNotes={uploadAdminNotes}
                 setAdminNotes={setUploadAdminNotes}
                 updatingUploadId={updatingUploadId}
@@ -2156,8 +2279,260 @@ export default function AdminDashboard() {
             {activeView === "settings" && <SettingsView />}
           </div>
         </section>
+        <AIAdminHelpBot
+          setActiveView={setActiveView}
+          activeView={activeView}
+          profile={adminProfile}
+        />
       </div>
     </main>
+  );
+}
+
+function AIAdminHelpBot({ setActiveView, activeView, profile }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [isThinking, setIsThinking] = useState(false);
+  const [messages, setMessages] = useState([
+    {
+      sender: "bot",
+      text:
+        "Hi! I am your Claude-powered Admin Help Assistant. Ask me about reviewing mileage, Jobber timesheets, paper sheets, reports, messages, settings, or general questions.",
+      actions: [
+        { label: "Mileage Review", view: "mileage" },
+        { label: "Paper Sheets", view: "paper-sheets" },
+        { label: "Reports", view: "reports" },
+      ],
+    },
+  ]);
+
+  const quickPrompts = [
+    "How do I scan a paper sheet?",
+    "How do I remove a Jobber timesheet?",
+    "How do I export reports?",
+    "How do I add mileage for a worker?",
+  ];
+
+  function getFallbackReply(userText) {
+    const text = String(userText || "").toLowerCase();
+
+    if (text.includes("paper") || text.includes("scan") || text.includes("upload")) {
+      return {
+        text:
+          "Go to Paper Sheets. Use Admin Upload to select the worker and file, then click Scan With Claude. Review any red notes before the worker submits final entries.",
+        actions: [{ label: "Paper Sheets", view: "paper-sheets" }],
+      };
+    }
+
+    if (text.includes("jobber") || text.includes("timesheet")) {
+      return {
+        text:
+          "Go to Jobber Timesheets. You can complete mileage or remove an incorrect timesheet. Removed timesheets disappear from worker/admin review and reports.",
+        actions: [{ label: "Jobber Timesheets", view: "timesheets" }],
+      };
+    }
+
+    if (text.includes("report") || text.includes("csv") || text.includes("export")) {
+      return {
+        text:
+          "Go to Reports. Filter by month, worker, vehicle, status, or search text, then download the CSV for spreadsheet review.",
+        actions: [{ label: "Reports", view: "reports" }],
+      };
+    }
+
+    if (text.includes("worker") || text.includes("add") || text.includes("entry")) {
+      return {
+        text:
+          "Use Admin Add Entry to submit mileage for a selected worker, or Mileage Review to inspect and correct saved entries.",
+        actions: [
+          { label: "Admin Add Entry", view: "add-entry" },
+          { label: "Mileage Review", view: "mileage" },
+        ],
+      };
+    }
+
+    return {
+      text:
+        "I can help with admin mileage review, adding entries, Jobber timesheets, paper sheet scanning, reports, messages, workers, and settings.",
+      actions: [
+        { label: "Mileage Review", view: "mileage" },
+        { label: "Paper Sheets", view: "paper-sheets" },
+        { label: "Reports", view: "reports" },
+      ],
+    };
+  }
+
+  async function sendMessage(textOverride) {
+    const cleanText = String(textOverride || draft).trim();
+    if (!cleanText || isThinking) return;
+
+    const fallbackReply = getFallbackReply(cleanText);
+
+    setMessages((currentMessages) => [
+      ...currentMessages,
+      { sender: "user", text: cleanText },
+    ]);
+    setDraft("");
+    setIsOpen(true);
+    setIsThinking(true);
+
+    try {
+      const claudeReply = await askClaudeAssistant({
+        message: cleanText,
+        history: messages,
+        role: "admin",
+        activeView,
+        profile,
+      });
+
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        {
+          sender: "bot",
+          text: claudeReply.text || fallbackReply.text,
+          actions: fallbackReply.actions || [],
+        },
+      ]);
+    } catch (error) {
+      console.warn("Claude admin assistant unavailable; using local fallback.", error);
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        {
+          sender: "bot",
+          text: fallbackReply.text,
+          actions: fallbackReply.actions || [],
+        },
+      ]);
+    } finally {
+      setIsThinking(false);
+    }
+  }
+
+  function handleAction(action) {
+    if (!action?.view) return;
+    setActiveView(action.view);
+    setIsOpen(false);
+  }
+
+  return (
+    <div className="fixed bottom-5 right-5 z-50">
+      {isOpen && (
+        <div className="mb-4 flex h-[520px] w-[370px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[2rem] bg-white shadow-2xl shadow-slate-400/30 ring-1 ring-slate-200">
+          <div className="prosper-hero-gradient flex items-center justify-between gap-4 p-4 text-white">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="shrink-0 rounded-2xl bg-white/15 p-3">
+                <Bot size={22} />
+              </div>
+              <p className="truncate text-sm font-black">
+                Admin Claude Assistant
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsOpen(false)}
+              className="rounded-xl bg-white/10 p-2 transition hover:bg-white/20"
+              aria-label="Close admin help assistant"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
+            {messages.map((message, index) => {
+              const isUser = message.sender === "user";
+
+              return (
+                <div
+                  key={index}
+                  className={isUser ? "flex justify-end" : "flex justify-start"}
+                >
+                  <div
+                    className={
+                      "max-w-[88%] rounded-3xl px-4 py-3 text-sm font-semibold leading-6 " +
+                      (isUser
+                        ? "bg-[#2f8fc8] text-white"
+                        : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200")
+                    }
+                  >
+                    <p>{message.text}</p>
+                    {!isUser && message.actions?.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {message.actions.map((action) => (
+                          <button
+                            key={action.label}
+                            type="button"
+                            onClick={() => handleAction(action)}
+                            className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700 transition hover:bg-blue-100"
+                          >
+                            {action.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {isThinking && (
+              <div className="flex justify-start">
+                <div className="rounded-3xl bg-white px-4 py-3 text-sm font-semibold text-slate-500 shadow-sm ring-1 ring-slate-200">
+                  Claude is thinking...
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="border-t border-slate-200 bg-white p-3">
+            <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+              {quickPrompts.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => sendMessage(prompt)}
+                  className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600 transition hover:bg-blue-50 hover:text-blue-700"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                sendMessage();
+              }}
+              className="flex items-center gap-2"
+            >
+              <input
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                disabled={isThinking}
+                placeholder="Ask Claude for help..."
+                className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              />
+              <button
+                type="submit"
+                disabled={!draft.trim() || isThinking}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#2f8fc8] text-white shadow-lg shadow-blue-100 transition hover:bg-[#1f6f9f] disabled:cursor-not-allowed disabled:opacity-60"
+                aria-label="Send admin help question"
+              >
+                <Send size={18} />
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        className="flex items-center gap-3 rounded-full bg-[#2f8fc8] px-5 py-4 text-sm font-black text-white shadow-2xl shadow-blue-300 transition hover:-translate-y-0.5 hover:bg-[#1f6f9f]"
+      >
+        <Bot size={22} />
+        {isOpen ? "Close Help" : "Need Help?"}
+      </button>
+    </div>
   );
 }
 
@@ -3866,6 +4241,16 @@ function PaperSheetsReviewView({
   setWorkerFilter,
   searchTerm,
   setSearchTerm,
+  uploadWorkerId,
+  setUploadWorkerId,
+  uploadMonthKey,
+  setUploadMonthKey,
+  uploadNotes,
+  setUploadNotes,
+  uploadFile,
+  onFileChange,
+  onUploadPaperSheet,
+  uploadingPaperSheet,
   adminNotes,
   setAdminNotes,
   updatingUploadId,
@@ -3912,7 +4297,7 @@ function PaperSheetsReviewView({
           <SectionTitle
             eyebrow="Paper Sheets"
             title="Uploaded Mileage Sheets"
-            text="Review worker-uploaded paper mileage sheets, open documents, add notes, update status, and optionally run AI conversion when credits are available."
+            text="Review worker-uploaded paper mileage sheets, upload a sheet for a selected worker, scan with Claude, and check draft rows before workers submit them."
           />
 
           <div className="inline-flex h-12 items-center gap-2 rounded-2xl bg-blue-50 px-4 text-sm font-black text-blue-700">
@@ -3943,6 +4328,93 @@ function PaperSheetsReviewView({
             helper="Finished sheets"
           />
         </div>
+
+        <form
+          onSubmit={onUploadPaperSheet}
+          className="mt-6 rounded-[1.5rem] border border-blue-100 bg-blue-50/60 p-5"
+        >
+          <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-start">
+            <SectionTitle
+              eyebrow="Admin Upload"
+              title="Upload Paper Sheet For Worker"
+              text="Choose the worker, mileage month, and paper sheet file. The worker will see the upload and can edit Claude draft rows before submitting."
+              titleClassName="text-xl"
+            />
+
+            <button
+              type="submit"
+              disabled={uploadingPaperSheet}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#2f8fc8] px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-[#1f6f9f] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <FileUp size={17} />
+              {uploadingPaperSheet ? "Uploading..." : "Upload For Worker"}
+            </button>
+          </div>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_220px_1.1fr]">
+            <FormField label="Worker">
+              <select
+                required
+                value={uploadWorkerId}
+                onChange={(event) => setUploadWorkerId(event.target.value)}
+                className={inputClass}
+              >
+                <option value="">Select Worker</option>
+                {workers.map((worker) => (
+                  <option key={worker.id} value={worker.id}>
+                    {worker.full_name || worker.email || "Unnamed Worker"}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+
+            <FormField label="Mileage Month">
+              <input
+                type="month"
+                required
+                value={uploadMonthKey}
+                onChange={(event) => setUploadMonthKey(event.target.value)}
+                className={inputClass}
+              />
+            </FormField>
+
+            <FormField label="File">
+              <input
+                id="admin-paper-sheet-file-input"
+                type="file"
+                accept="image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf"
+                onChange={onFileChange}
+                className="block h-12 w-full cursor-pointer rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 file:mr-4 file:rounded-xl file:border-0 file:bg-[#2f8fc8] file:px-4 file:py-2 file:font-bold file:text-white"
+              />
+            </FormField>
+          </div>
+
+          <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_260px]">
+            <FormField label="Notes For Worker / Admin">
+              <textarea
+                rows="3"
+                value={uploadNotes}
+                onChange={(event) => setUploadNotes(event.target.value)}
+                placeholder="Example: Uploaded from office scan. Please review row 4 before submitting."
+                className="w-full resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              />
+            </FormField>
+
+            <div className="rounded-2xl bg-white p-4 ring-1 ring-blue-100">
+              <p className="text-xs font-black uppercase tracking-wide text-slate-500">
+                Selected File
+              </p>
+              <p className="mt-2 break-words text-sm font-black text-slate-950">
+                {uploadFile?.name || "No file selected"}
+              </p>
+              {uploadFile && (
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {formatFileSize(uploadFile.size)} • {uploadFile.type || "file"}
+                </p>
+              )}
+            </div>
+          </div>
+        </form>
 
         <div className="mt-6 grid gap-3 xl:grid-cols-[1fr_1fr_1.4fr]">
           <select
@@ -4140,7 +4612,7 @@ function PaperSheetsReviewView({
                               onClick={() => onConvertUpload(upload)}
                               className="inline-flex items-center gap-2 rounded-xl bg-violet-50 px-3 py-2 text-xs font-black text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                              {isConverting ? "Converting..." : "Convert AI Optional"}
+                              {isConverting ? "Scanning..." : "Scan With Claude"}
                             </button>
 
                             <button
@@ -4185,9 +4657,9 @@ function PaperSheetsReviewView({
         <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200 xl:p-8">
           <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
             <SectionTitle
-              eyebrow="AI Draft Rows"
+              eyebrow="Claude Draft Rows"
               title={selectedUpload.file_name}
-              text="These are the rows extracted by AI. Workers can edit and submit these as final mileage entries from their dashboard."
+              text="These are the rows extracted by Claude. Workers can edit and submit these as final mileage entries from their dashboard."
             />
 
             <button
@@ -4265,9 +4737,29 @@ function PaperSheetsReviewView({
                         {row.purpose || "—"}
                       </td>
                       <td className="px-4 py-4">
-                        <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
+                        <span
+                          className={
+                            "rounded-full px-3 py-1 text-xs font-black " +
+                            (row.review_notes
+                              ? "bg-red-50 text-red-700"
+                              : row.needs_review
+                                ? "bg-amber-50 text-amber-700"
+                                : "bg-emerald-50 text-emerald-700")
+                          }
+                        >
                           {row.needs_review ? "Review" : "OK"}
                         </span>
+                        {row.review_notes && (
+                          <p className="mt-2 max-w-[240px] text-xs font-semibold leading-5 text-red-600">
+                            {row.review_notes}
+                          </p>
+                        )}
+                        {row.ai_confidence !== null &&
+                          row.ai_confidence !== undefined && (
+                            <p className="mt-1 text-xs font-semibold text-slate-400">
+                              Confidence: {Math.round(Number(row.ai_confidence) * 100)}%
+                            </p>
+                          )}
                       </td>
                     </tr>
                   ))
@@ -4276,7 +4768,7 @@ function PaperSheetsReviewView({
                     <td colSpan="10" className="px-6 py-12">
                       <EmptyState
                         title="No Draft Rows Yet"
-                        text="Open the uploaded document for manual review, or run AI conversion when credits are available."
+                        text="Open the uploaded document for manual review, or scan it with Claude when ready."
                       />
                     </td>
                   </tr>
@@ -4309,7 +4801,7 @@ function AiStatusBadge({ status }) {
         (statusClasses[cleanStatus] || statusClasses.not_started)
       }
     >
-      AI: {cleanStatus.replaceAll("_", " ")}
+      Claude: {cleanStatus.replaceAll("_", " ")}
     </span>
   );
 }
@@ -5375,6 +5867,24 @@ function formatFileSize(size) {
   }
 
   return (numberSize / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function isAllowedPaperSheetFile(file) {
+  const allowedTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+  ];
+
+  return allowedTypes.includes(file?.type);
+}
+
+function sanitizeFileName(fileName) {
+  return String(fileName || "paper-sheet")
+    .toLowerCase()
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/(^-|-$)/g, "");
 }
 
 function getPageTitle(activeView) {

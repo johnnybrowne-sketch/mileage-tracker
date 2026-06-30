@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 
 import { supabase } from "../lib/supabaseClient";
+import { askClaudeAssistant } from "../services/claudeAssistantService";
 import { signOutUser } from "../services/authService";
 import { getProfileForUser } from "../services/profileService";
 import { getProperties } from "../services/propertyService";
@@ -1343,13 +1344,13 @@ export default function WorkerDashboard() {
       ]);
 
       setDraftSuccess(
-        "AI conversion finished. Please review and edit the draft rows before submitting."
+        "Claude scan finished. Please review and edit flagged draft rows before submitting."
       );
     } catch (error) {
       console.error(error);
       setDraftError(
         error?.message ||
-          "AI conversion failed. Please check the Edge Function logs."
+          "Claude scan failed. Please check the Edge Function logs."
       );
     } finally {
       setConvertingUploadId("");
@@ -1843,14 +1844,15 @@ export default function WorkerDashboard() {
 }
 
 
-function AIWorkerHelpBot({ setActiveView }) {
+function AIWorkerHelpBot({ setActiveView, activeView, profile }) {
   const [isOpen, setIsOpen] = useState(false);
   const [draft, setDraft] = useState("");
+  const [isThinking, setIsThinking] = useState(false);
   const [messages, setMessages] = useState([
     {
       sender: "bot",
       text:
-        "Hi! I can help you use the Mileage Tracker. Ask me where to add mileage, upload paper sheets, review records, message admin, or check route tools.",
+        "Hi! I am your Claude-powered Mileage Help Assistant. Ask me about mileage entries, Jobber timesheets, paper sheet scanning, reports, messages, route tools, or general questions.",
       actions: [
         { label: "Add Mileage", view: "new-entry" },
         { label: "Upload Sheet", view: "upload" },
@@ -1984,7 +1986,7 @@ function AIWorkerHelpBot({ setActiveView }) {
     ) {
       return {
         text:
-          "Go to Upload Paper Sheet. Choose your photo, PDF, or document, select the mileage month, add notes if needed, and upload it. Admin can review the file even if AI conversion is not used.",
+          "Go to Upload Paper Sheet. Choose your photo or PDF, select the mileage month, add notes if needed, and upload it. Claude can scan it into editable rows, and admin can still review the original file.",
         actions: [{ label: "Go To Upload Paper Sheet", view: "upload" }],
       };
     }
@@ -2092,25 +2094,53 @@ function AIWorkerHelpBot({ setActiveView }) {
     };
   }
 
-  function sendMessage(textOverride) {
+  async function sendMessage(textOverride) {
     const cleanText = String(textOverride || draft).trim();
 
-    if (!cleanText) return;
+    if (!cleanText || isThinking) return;
 
-    const reply = getBotReply(cleanText);
+    const fallbackReply = getBotReply(cleanText);
 
     setMessages((currentMessages) => [
       ...currentMessages,
       { sender: "user", text: cleanText },
-      {
-        sender: "bot",
-        text: reply.text,
-        actions: reply.actions || [],
-      },
     ]);
 
     setDraft("");
     setIsOpen(true);
+    setIsThinking(true);
+
+    try {
+      const claudeReply = await askClaudeAssistant({
+        message: cleanText,
+        history: messages,
+        role: "worker",
+        activeView,
+        profile,
+      });
+
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        {
+          sender: "bot",
+          text: claudeReply.text || fallbackReply.text,
+          actions: fallbackReply.actions || [],
+        },
+      ]);
+    } catch (error) {
+      console.warn("Claude help assistant unavailable; using local fallback.", error);
+
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        {
+          sender: "bot",
+          text: fallbackReply.text,
+          actions: fallbackReply.actions || [],
+        },
+      ]);
+    } finally {
+      setIsThinking(false);
+    }
   }
 
   function goToView(view) {
@@ -2191,6 +2221,13 @@ function AIWorkerHelpBot({ setActiveView }) {
                 </div>
               );
             })}
+            {isThinking && (
+              <div className="flex justify-start">
+                <div className="max-w-[88%] rounded-3xl bg-white px-4 py-3 text-sm font-semibold leading-6 text-slate-500 shadow-sm ring-1 ring-slate-200">
+                  Claude is thinking...
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="border-t border-slate-200 bg-white p-3">
@@ -2217,13 +2254,14 @@ function AIWorkerHelpBot({ setActiveView }) {
               <input
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
-                placeholder="Ask how to use the app..."
+                disabled={isThinking}
+                placeholder="Ask Claude for help..."
                 className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
               />
 
               <button
                 type="submit"
-                disabled={!draft.trim()}
+                disabled={!draft.trim() || isThinking}
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 aria-label="Send help question"
               >
@@ -3738,7 +3776,7 @@ function UploadSheetView({
         <SectionTitle
           eyebrow="Paper Sheet Upload"
           title="Upload Mileage Form"
-          text="Upload a photo or PDF of a paper mileage sheet. Admin receives the document immediately and can review it manually. AI conversion is optional when credits are available."
+          text="Upload a photo or PDF of a paper mileage sheet. Admin receives the document immediately and Claude can scan it into editable draft rows."
         />
 
         <form onSubmit={onUpload} className="mt-6 space-y-5">
@@ -3826,7 +3864,7 @@ function UploadSheetView({
         <SectionTitle
           eyebrow="Upload History"
           title="Your Paper Sheets"
-          text="Uploaded files are available to admin right away. Use AI conversion only when available, or let admin review the document manually."
+          text="Uploaded files are available to admin right away. Use Claude scanning to create editable mileage rows, or let admin review the document manually."
         />
 
         {draftError && <div className="mt-5"><AlertBox type="error" message={draftError} /></div>}
@@ -3844,6 +3882,9 @@ function UploadSheetView({
               const draftTotalMiles = uploadDraftRows.reduce((total, row) => {
                 return total + Number(row.miles || 0);
               }, 0);
+              const rowsNeedingReview = uploadDraftRows.filter((row) => {
+                return row.needs_review || row.review_notes;
+              });
 
               const isConverting = convertingUploadId === upload.id;
               const isSaving = savingDraftUploadId === upload.id;
@@ -3901,7 +3942,7 @@ function UploadSheetView({
                           className="inline-flex items-center gap-2 rounded-xl bg-violet-50 px-3 py-2 text-xs font-black text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           <Sparkles size={14} />
-                          {isConverting ? "Converting..." : "Convert With AI"}
+                          {isConverting ? "Scanning..." : "Scan With Claude"}
                         </button>
 
                         <button
@@ -3936,7 +3977,7 @@ function UploadSheetView({
                       <div className="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-center">
                         <div>
                           <h4 className="font-black text-slate-950">
-                            Editable AI Draft Rows
+                            Editable Claude Draft Rows
                           </h4>
                           <p className="mt-1 text-sm leading-6 text-slate-500">
                             Review and correct every field before submitting.
@@ -3984,6 +4025,14 @@ function UploadSheetView({
                           </option>
                         ))}
                       </datalist>
+
+                      {rowsNeedingReview.length > 0 && !isSubmitted && (
+                        <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold leading-6 text-red-700">
+                          Claude marked {rowsNeedingReview.length} row
+                          {rowsNeedingReview.length === 1 ? "" : "s"} for review.
+                          Fix any "not readable" fields and property codes before submitting.
+                        </div>
+                      )}
 
                       <div className="overflow-auto rounded-3xl border border-slate-200">
                         <table className="w-full min-w-[1500px] border-collapse text-left text-sm">
@@ -4117,9 +4166,30 @@ function UploadSheetView({
                                 </td>
 
                                 <td className="px-3 py-3">
-                                  <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
+                                  <span
+                                    className={
+                                      "rounded-full px-3 py-1 text-xs font-black " +
+                                      (row.review_notes
+                                        ? "bg-red-50 text-red-700"
+                                        : row.needs_review
+                                          ? "bg-amber-50 text-amber-700"
+                                          : "bg-emerald-50 text-emerald-700")
+                                    }
+                                  >
                                     {row.needs_review ? "Review" : "OK"}
                                   </span>
+                                  {row.review_notes && (
+                                    <p className="mt-2 max-w-[220px] text-xs font-semibold leading-5 text-red-600">
+                                      {row.review_notes}
+                                    </p>
+                                  )}
+                                  {row.ai_confidence !== null &&
+                                    row.ai_confidence !== undefined && (
+                                      <p className="mt-1 text-xs font-semibold text-slate-400">
+                                        Confidence:{" "}
+                                        {Math.round(Number(row.ai_confidence) * 100)}%
+                                      </p>
+                                    )}
                                 </td>
 
                                 <td className="px-3 py-3">
@@ -4141,10 +4211,10 @@ function UploadSheetView({
                   ) : (
                     <div className="p-5 text-center">
                       <p className="font-black text-slate-950">
-                        No AI draft rows yet.
+                        No Claude draft rows yet.
                       </p>
                       <p className="mt-2 text-sm text-slate-500">
-                        Click Convert With AI to extract editable mileage rows
+                        Click Scan With Claude to extract editable mileage rows
                         from the uploaded paper sheet.
                       </p>
                     </div>
@@ -4201,7 +4271,7 @@ function AiStatusBadge({ status }) {
         (statusClasses[cleanStatus] || statusClasses.not_started)
       }
     >
-      AI: {cleanStatus.replaceAll("_", " ")}
+      Claude: {cleanStatus.replaceAll("_", " ")}
     </span>
   );
 }
@@ -4272,7 +4342,7 @@ function WorkerHelpBot({ setActiveView }) {
     ) {
       return {
         text:
-          "To upload a paper mileage sheet, go to Upload Paper Sheet. Choose your file, select the month, add notes if needed, and upload it. Admin can review it even if AI conversion is not used.",
+          "To upload a paper mileage sheet, go to Upload Paper Sheet. Choose your file, select the month, add notes if needed, and upload it. Claude can scan it into editable rows, and admin can still review it manually.",
         actions: [{ label: "Go To Upload Paper Sheet", view: "upload" }],
       };
     }
@@ -4635,7 +4705,7 @@ function HelpView() {
 
           <SmallInfoCard
             title="Paper Sheets"
-            text="Upload photos or PDFs of paper mileage forms. When AI credits are active, Convert With AI creates editable draft rows before final submission."
+            text="Upload photos or PDFs of paper mileage forms. Scan With Claude creates editable draft rows before final submission."
           />
 
           <SmallInfoCard
@@ -5092,7 +5162,12 @@ function buildDraftEntryPayload(row) {
         ? null
         : Number(row.miles),
     purpose: row.purpose || "",
-    needs_review: true,
+    review_notes: row.review_notes || null,
+    ai_confidence:
+      row.ai_confidence === "" || row.ai_confidence === null
+        ? null
+        : Number(row.ai_confidence),
+    needs_review: Boolean(row.needs_review || row.review_notes),
   };
 }
 
