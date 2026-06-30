@@ -1,5 +1,6 @@
 import { supabase } from "../lib/supabaseClient";
 import { buildMileageWorkflowFields } from "./mileageWorkflowService";
+import { syncVehicleOdometerAfterMileage } from "./vehicleOdometerService";
 
 export function getCurrentMonthKey() {
   const now = new Date();
@@ -190,10 +191,13 @@ export async function saveWorkerMileageEntry({
   profile,
   entryDate,
   vehicleName,
+  vehicleId = "",
   propertyCode,
   propertyDisplay,
   startOdometer,
   endOdometer,
+  expectedStartOdometer = startOdometer,
+  odometerOverrideReason = "",
   purpose,
   jobberVisit = null,
   jobberTimesheetId = null,
@@ -272,7 +276,9 @@ export async function saveWorkerMileageEntry({
       jobberVisit,
       jobberTimesheetId,
       vehicleName,
+      expectedStartOdometer,
       startOdometer,
+      odometerOverrideReason,
       purpose,
     }),
   });
@@ -291,6 +297,19 @@ export async function saveWorkerMileageEntry({
 
     if (updateTimesheetError) throw updateTimesheetError;
   }
+
+  await syncVehicleOdometerAfterMileage({
+    vehicleId,
+    vehicleName,
+    workerId: profile.id,
+    workerName: profile.full_name || profile.email || "Worker",
+    mileageEntryId: data.id,
+    startOdometer,
+    expectedStartOdometer,
+    endOdometer,
+    overrideReason: odometerOverrideReason,
+    updatedBy: profile.id,
+  });
 
   return data;
 }

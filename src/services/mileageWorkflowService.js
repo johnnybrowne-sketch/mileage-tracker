@@ -41,6 +41,7 @@ export function buildMileageWorkflowFields({
   vehicleName = "",
   startOdometer = "",
   expectedStartOdometer = startOdometer,
+  odometerOverrideReason = "",
   purpose = "",
 }) {
   const enteredStart = toNumberOrNull(startOdometer);
@@ -68,7 +69,9 @@ export function buildMileageWorkflowFields({
     business_note: String(purpose || "").trim() || null,
     odometer_expected_start: expectedStart,
     odometer_start_confirmed: startWasConfirmed,
-    odometer_override_reason: startWasConfirmed ? null : String(purpose || "").trim() || null,
+    odometer_override_reason: startWasConfirmed
+      ? null
+      : String(odometerOverrideReason || "").trim() || null,
     unattributed_miles: unattributedMiles,
   };
 }
