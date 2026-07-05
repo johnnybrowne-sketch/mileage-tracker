@@ -582,6 +582,10 @@ export default function WorkerDashboard() {
         nextForm.usesSharedVehicleOdometer = odometerStart.isSharedVehicle;
         nextForm.odometerOverrideReason = "";
         nextForm.endOdometer = "";
+        nextForm.purpose = syncPurposeWithVehicleUnitPrefix(
+          currentForm.purpose,
+          selectedVehicle || selectedVehicleName
+        );
       }
 
       if (
@@ -604,6 +608,10 @@ export default function WorkerDashboard() {
         nextForm.usesSharedVehicleOdometer = Boolean(value);
         nextForm.odometerOverrideReason = "";
         nextForm.endOdometer = "";
+        nextForm.purpose = syncPurposeWithVehicleUnitPrefix(
+          currentForm.purpose,
+          value
+        );
       }
 
       return nextForm;
@@ -701,7 +709,7 @@ export default function WorkerDashboard() {
 
       setForm((currentForm) => ({
         ...blankForm,
-        entryDate: getTodayInputValue(),
+        entryDate: currentForm.entryDate,
         vehicleId: currentForm.vehicleId,
         customVehicleName: currentForm.customVehicleName,
         propertyCode: "",
@@ -710,7 +718,7 @@ export default function WorkerDashboard() {
         usesSharedVehicleOdometer: currentForm.usesSharedVehicleOdometer,
         odometerOverrideReason: "",
         endOdometer: "",
-        purpose: "",
+        purpose: currentForm.purpose,
       }));
       setSelectedJobberVisit(null);
 
@@ -799,6 +807,10 @@ export default function WorkerDashboard() {
         nextForm.usesSharedVehicleOdometer = odometerStart.isSharedVehicle;
         nextForm.odometerOverrideReason = "";
         nextForm.endOdometer = "";
+        nextForm.purpose = syncPurposeWithVehicleUnitPrefix(
+          currentForm.purpose,
+          selectedVehicle || selectedVehicleName
+        );
       }
 
       if (
@@ -821,6 +833,10 @@ export default function WorkerDashboard() {
         nextForm.usesSharedVehicleOdometer = Boolean(value);
         nextForm.odometerOverrideReason = "";
         nextForm.endOdometer = "";
+        nextForm.purpose = syncPurposeWithVehicleUnitPrefix(
+          currentForm.purpose,
+          value
+        );
       }
 
       return nextForm;
@@ -1353,7 +1369,16 @@ export default function WorkerDashboard() {
   function updatePaperDraftEntry(draftId, field, value) {
     setPaperDraftEntries((currentRows) =>
       currentRows.map((row) => {
-        if (String(row.id) !== String(draftId)) {
+        const targetRow = currentRows.find((item) => {
+          return String(item.id) === String(draftId);
+        });
+        const shouldApplyToRow =
+          field === "vehicle"
+            ? targetRow &&
+              String(row.upload_id) === String(targetRow.upload_id)
+            : String(row.id) === String(draftId);
+
+        if (!shouldApplyToRow) {
           return row;
         }
 
@@ -1363,6 +1388,13 @@ export default function WorkerDashboard() {
           ...row,
           [field]: cleanValue,
         };
+
+        if (field === "vehicle") {
+          nextRow.purpose = syncPurposeWithVehicleUnitPrefix(
+            row.purpose,
+            cleanValue
+          );
+        }
 
         if (field === "property_code") {
           const selectedProperty = findPropertyByCode(properties, cleanValue);
@@ -1401,9 +1433,11 @@ export default function WorkerDashboard() {
   function handleAddPaperDraftRow(upload) {
     if (!profile?.id || !upload?.id) return;
 
-    const uploadRows = paperDraftEntries.filter((row) => {
-      return String(row.upload_id) === String(upload.id);
-    });
+    const uploadRows = getRenumberedPaperDraftRows(
+      paperDraftEntries.filter((row) => {
+        return String(row.upload_id) === String(upload.id);
+      })
+    );
 
     const lastRow = uploadRows[uploadRows.length - 1];
 
@@ -1425,7 +1459,9 @@ export default function WorkerDashboard() {
       is_new: true,
     };
 
-    setPaperDraftEntries((currentRows) => [...currentRows, newRow]);
+    setPaperDraftEntries((currentRows) =>
+      renumberPaperDraftRowsForUpload([...currentRows, newRow], upload.id)
+    );
   }
 
   async function handleDeletePaperDraftRow(row) {
@@ -1439,7 +1475,10 @@ export default function WorkerDashboard() {
     try {
       if (String(row.id).startsWith("new-")) {
         setPaperDraftEntries((currentRows) =>
-          currentRows.filter((item) => String(item.id) !== String(row.id))
+          renumberPaperDraftRowsForUpload(
+            currentRows.filter((item) => String(item.id) !== String(row.id)),
+            row.upload_id
+          )
         );
         return;
       }
@@ -1451,6 +1490,13 @@ export default function WorkerDashboard() {
 
       if (error) throw error;
 
+      setPaperDraftEntries((currentRows) =>
+        renumberPaperDraftRowsForUpload(
+          currentRows.filter((item) => String(item.id) !== String(row.id)),
+          row.upload_id
+        )
+      );
+      await renumberPaperDraftRowsInDatabase(row.upload_id, profile.id);
       await refreshPaperDraftEntries(profile.id);
     } catch (error) {
       console.error(error);
@@ -1458,15 +1504,18 @@ export default function WorkerDashboard() {
     }
   }
 
-  async function handleSavePaperDraftRows(uploadId) {
+  async function handleSavePaperDraftRows(uploadId, rowsOverride = null) {
     if (!profile?.id) {
       setDraftError("Worker profile is missing.");
       return;
     }
 
-    const rowsForUpload = paperDraftEntries.filter((row) => {
-      return String(row.upload_id) === String(uploadId);
-    });
+    const rowsForUpload = getRenumberedPaperDraftRows(
+      rowsOverride ||
+        paperDraftEntries.filter((row) => {
+          return String(row.upload_id) === String(uploadId);
+        })
+    );
 
     setSavingDraftUploadId(uploadId);
     setDraftError("");
@@ -1526,9 +1575,11 @@ export default function WorkerDashboard() {
       return;
     }
 
-    const rowsForUpload = paperDraftEntries.filter((row) => {
-      return String(row.upload_id) === String(upload.id);
-    });
+    const rowsForUpload = getRenumberedPaperDraftRows(
+      paperDraftEntries.filter((row) => {
+        return String(row.upload_id) === String(upload.id);
+      })
+    );
 
     if (rowsForUpload.length === 0) {
       setDraftError("There are no draft rows to submit.");
@@ -1622,7 +1673,7 @@ export default function WorkerDashboard() {
     setDraftSuccess("");
 
     try {
-      await handleSavePaperDraftRows(upload.id);
+      await handleSavePaperDraftRows(upload.id, rowsForUpload);
 
       for (const row of rowsForUpload) {
         const selectedProperty = findPropertyByCode(properties, row.property_code);
@@ -3928,11 +3979,11 @@ function UploadSheetView({
         <div className="mt-6 space-y-5">
           {uploads.length > 0 ? (
             uploads.map((upload) => {
-              const uploadDraftRows = draftEntries
-                .filter((row) => String(row.upload_id) === String(upload.id))
-                .sort((first, second) => {
-                  return Number(first.entry_number || 0) - Number(second.entry_number || 0);
-                });
+              const uploadDraftRows = getRenumberedPaperDraftRows(
+                draftEntries.filter((row) => {
+                  return String(row.upload_id) === String(upload.id);
+                })
+              );
 
               const draftTotalMiles = uploadDraftRows.reduce((total, row) => {
                 return total + Number(row.miles || 0);
@@ -5508,6 +5559,83 @@ async function getWorkerPaperSheetDraftEntries(workerId) {
   return data || [];
 }
 
+function getSortedPaperDraftRows(rows = []) {
+  return [...(rows || [])].sort((first, second) => {
+    const firstEntry = Number(first.entry_number || 0);
+    const secondEntry = Number(second.entry_number || 0);
+
+    if (firstEntry !== secondEntry) {
+      return firstEntry - secondEntry;
+    }
+
+    const dateCompare = String(first.entry_date || "").localeCompare(
+      String(second.entry_date || "")
+    );
+
+    if (dateCompare !== 0) {
+      return dateCompare;
+    }
+
+    const createdCompare = String(first.created_at || "").localeCompare(
+      String(second.created_at || "")
+    );
+
+    if (createdCompare !== 0) {
+      return createdCompare;
+    }
+
+    return String(first.id || "").localeCompare(String(second.id || ""));
+  });
+}
+
+function getRenumberedPaperDraftRows(rows = []) {
+  return getSortedPaperDraftRows(rows).map((row, index) => ({
+    ...row,
+    entry_number: index + 1,
+  }));
+}
+
+function renumberPaperDraftRowsForUpload(rows = [], uploadId) {
+  const renumberedRows = getRenumberedPaperDraftRows(
+    rows.filter((row) => String(row.upload_id) === String(uploadId))
+  );
+  const renumberedById = new Map(
+    renumberedRows.map((row) => [String(row.id), row])
+  );
+
+  return rows.map((row) => renumberedById.get(String(row.id)) || row);
+}
+
+async function renumberPaperDraftRowsInDatabase(uploadId, workerId) {
+  if (!uploadId || !workerId) return;
+
+  const { data, error } = await supabase
+    .from("paper_sheet_draft_entries")
+    .select("id, upload_id, entry_number, entry_date, created_at")
+    .eq("upload_id", uploadId)
+    .eq("worker_id", workerId)
+    .order("entry_number", { ascending: true });
+
+  if (error) throw error;
+
+  const renumberedRows = getRenumberedPaperDraftRows(data || []);
+
+  await Promise.all(
+    renumberedRows.map((row) => {
+      return supabase
+        .from("paper_sheet_draft_entries")
+        .update({ entry_number: row.entry_number })
+        .eq("id", row.id);
+    })
+  ).then((results) => {
+    const failedResult = results.find((result) => result.error);
+
+    if (failedResult?.error) {
+      throw failedResult.error;
+    }
+  });
+}
+
 function buildDraftEntryPayload(row) {
   return {
     entry_number: row.entry_number === "" ? null : Number(row.entry_number),
@@ -5674,6 +5802,75 @@ function getWorkerFormVehicleName(form, vehicles, profile) {
   });
 
   return getWorkerVehicleDisplayName(selectedVehicle, profile);
+}
+
+function syncPurposeWithVehicleUnitPrefix(purpose, vehicleOrName) {
+  const cleanPurpose = removeVehicleUnitPurposePrefix(purpose);
+  const unitLabel = getVehicleUnitLabel(vehicleOrName);
+
+  if (!unitLabel) {
+    return cleanPurpose;
+  }
+
+  return cleanPurpose ? `${unitLabel} - ${cleanPurpose}` : `${unitLabel} - `;
+}
+
+function removeVehicleUnitPurposePrefix(purpose) {
+  return String(purpose || "")
+    .replace(/^\s*(?:van\s*#?\s*\d+|tall\s*boy\s*#?\s*\d+)\s*-\s*/i, "")
+    .trimStart();
+}
+
+function getVehicleUnitLabel(vehicleOrName) {
+  const explicitUnit =
+    typeof vehicleOrName === "object" && vehicleOrName !== null
+      ? vehicleOrName.vehicle_unit ||
+        vehicleOrName.vehicle_subclass ||
+        vehicleOrName.subclass
+      : "";
+  const explicitLabel = normalizeVehicleUnitLabel(explicitUnit);
+
+  if (explicitLabel) {
+    return explicitLabel;
+  }
+
+  const vehicleName =
+    typeof vehicleOrName === "object" && vehicleOrName !== null
+      ? getVehicleLabel(vehicleOrName)
+      : String(vehicleOrName || "");
+
+  const nameParts = String(vehicleName || "")
+    .split(/\s+-\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reverse();
+
+  for (const part of nameParts) {
+    const label = normalizeVehicleUnitLabel(part);
+
+    if (label) {
+      return label;
+    }
+  }
+
+  return "";
+}
+
+function normalizeVehicleUnitLabel(value) {
+  const text = String(value || "").trim();
+  const vanMatch = text.match(/\bvan\s*#?\s*(\d+)\b/i);
+
+  if (vanMatch) {
+    return `Van #${vanMatch[1]}`;
+  }
+
+  const tallBoyMatch = text.match(/\btall\s*boy\s*#?\s*(\d+)\b/i);
+
+  if (tallBoyMatch) {
+    return `Tall Boy #${tallBoyMatch[1]}`;
+  }
+
+  return "";
 }
 
 function findWorkerVehicleByDisplayName(vehicles, vehicleName, profile) {

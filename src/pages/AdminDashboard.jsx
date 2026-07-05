@@ -1096,6 +1096,10 @@ export default function AdminDashboard() {
           value === OTHER_COMPANY_VEHICLE_VALUE ? currentForm.customVehicleName : "";
         nextForm.odometerOverrideReason = "";
         nextForm.endOdometer = "";
+        nextForm.purpose = syncPurposeWithVehicleUnitPrefix(
+          currentForm.purpose,
+          matchedVehicle || effectiveVehicleName
+        );
       }
 
       if (
@@ -1118,6 +1122,10 @@ export default function AdminDashboard() {
         nextForm.usesSharedVehicleOdometer = Boolean(value);
         nextForm.odometerOverrideReason = "";
         nextForm.endOdometer = "";
+        nextForm.purpose = syncPurposeWithVehicleUnitPrefix(
+          currentForm.purpose,
+          value
+        );
       }
 
       return nextForm;
@@ -1284,6 +1292,7 @@ export default function AdminDashboard() {
       setAddForm({
         ...blankAddForm,
         workerId: selectedWorkerForAdd.id,
+        entryDate: addForm.entryDate,
         vehicleName: addForm.vehicleName,
         customVehicleName: addForm.customVehicleName,
         startOdometer: addForm.endOdometer,
@@ -1292,7 +1301,7 @@ export default function AdminDashboard() {
         odometerOverrideReason: "",
         endOdometer: "",
         propertyCode: "",
-        purpose: "",
+        purpose: addForm.purpose,
       });
     } catch (error) {
       console.error(error);
@@ -1387,6 +1396,10 @@ export default function AdminDashboard() {
           value === OTHER_COMPANY_VEHICLE_VALUE ? currentForm.customVehicleName : "";
         nextForm.odometerOverrideReason = "";
         nextForm.endOdometer = "";
+        nextForm.purpose = syncPurposeWithVehicleUnitPrefix(
+          currentForm.purpose,
+          matchedVehicle || effectiveVehicleName
+        );
       }
 
       if (
@@ -1409,6 +1422,10 @@ export default function AdminDashboard() {
         nextForm.usesSharedVehicleOdometer = Boolean(value);
         nextForm.odometerOverrideReason = "";
         nextForm.endOdometer = "";
+        nextForm.purpose = syncPurposeWithVehicleUnitPrefix(
+          currentForm.purpose,
+          value
+        );
       }
 
       return nextForm;
@@ -4693,10 +4710,10 @@ function PaperSheetsReviewView({
 
               <tbody className="divide-y divide-slate-100">
                 {selectedDraftRows.length > 0 ? (
-                  selectedDraftRows.map((row) => (
+                  selectedDraftRows.map((row, rowIndex) => (
                     <tr key={row.id} className="bg-white">
                       <td className="px-4 py-4 font-black text-slate-950">
-                        {row.entry_number || "—"}
+                        {rowIndex + 1}
                       </td>
                       <td className="px-4 py-4 text-slate-700">
                         {formatDate(row.entry_date)}
@@ -6091,6 +6108,75 @@ function getAdminFormVehicleName(form) {
   }
 
   return String(form?.vehicleName || "").trim();
+}
+
+function syncPurposeWithVehicleUnitPrefix(purpose, vehicleOrName) {
+  const cleanPurpose = removeVehicleUnitPurposePrefix(purpose);
+  const unitLabel = getVehicleUnitLabel(vehicleOrName);
+
+  if (!unitLabel) {
+    return cleanPurpose;
+  }
+
+  return cleanPurpose ? `${unitLabel} - ${cleanPurpose}` : `${unitLabel} - `;
+}
+
+function removeVehicleUnitPurposePrefix(purpose) {
+  return String(purpose || "")
+    .replace(/^\s*(?:van\s*#?\s*\d+|tall\s*boy\s*#?\s*\d+)\s*-\s*/i, "")
+    .trimStart();
+}
+
+function getVehicleUnitLabel(vehicleOrName) {
+  const explicitUnit =
+    typeof vehicleOrName === "object" && vehicleOrName !== null
+      ? vehicleOrName.vehicle_unit ||
+        vehicleOrName.vehicle_subclass ||
+        vehicleOrName.subclass
+      : "";
+  const explicitLabel = normalizeVehicleUnitLabel(explicitUnit);
+
+  if (explicitLabel) {
+    return explicitLabel;
+  }
+
+  const vehicleName =
+    typeof vehicleOrName === "object" && vehicleOrName !== null
+      ? getVehicleLabel(vehicleOrName)
+      : String(vehicleOrName || "");
+
+  const nameParts = String(vehicleName || "")
+    .split(/\s+-\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reverse();
+
+  for (const part of nameParts) {
+    const label = normalizeVehicleUnitLabel(part);
+
+    if (label) {
+      return label;
+    }
+  }
+
+  return "";
+}
+
+function normalizeVehicleUnitLabel(value) {
+  const text = String(value || "").trim();
+  const vanMatch = text.match(/\bvan\s*#?\s*(\d+)\b/i);
+
+  if (vanMatch) {
+    return `Van #${vanMatch[1]}`;
+  }
+
+  const tallBoyMatch = text.match(/\btall\s*boy\s*#?\s*(\d+)\b/i);
+
+  if (tallBoyMatch) {
+    return `Tall Boy #${tallBoyMatch[1]}`;
+  }
+
+  return "";
 }
 
 function getPersonalVehicleName(worker) {
