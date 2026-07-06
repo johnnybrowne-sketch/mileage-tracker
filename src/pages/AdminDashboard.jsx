@@ -229,6 +229,8 @@ export default function AdminDashboard() {
   const [selectedPaperUploadId, setSelectedPaperUploadId] = useState("");
   const [convertingPaperUploadId, setConvertingPaperUploadId] = useState("");
   const [savingAdminDraftUploadId, setSavingAdminDraftUploadId] = useState("");
+  const [submittingAdminDraftUploadId, setSubmittingAdminDraftUploadId] =
+    useState("");
   const [adminDraftError, setAdminDraftError] = useState("");
   const [adminDraftSuccess, setAdminDraftSuccess] = useState("");
 
@@ -253,6 +255,35 @@ export default function AdminDashboard() {
       assignments,
     }).filter((vehicleName) => vehicleName !== "all");
   }, [selectedPaperUploadId, paperUploads, workers, vehicles, assignments]);
+
+  const adminDraftOdometerPlan = useMemo(() => {
+    const selectedUpload = (paperUploads || []).find((upload) => {
+      return String(upload.id) === String(selectedPaperUploadId);
+    });
+
+    if (!selectedUpload) return new Map();
+
+    const uploadWorker =
+      (workers || []).find((worker) => {
+        return String(worker.id) === String(selectedUpload.worker_id);
+      }) || null;
+
+    const rowsForUpload = paperDraftEntries.filter((row) => {
+      return String(row.upload_id) === String(selectedUpload.id);
+    });
+
+    return buildAdminDraftOdometerPlan({
+      rows: rowsForUpload,
+      states: vehicleOdometerStates,
+      worker: uploadWorker,
+    });
+  }, [
+    selectedPaperUploadId,
+    paperUploads,
+    workers,
+    paperDraftEntries,
+    vehicleOdometerStates,
+  ]);
 
   const workerMap = useMemo(() => {
     const map = new Map();
@@ -1925,6 +1956,10 @@ export default function AdminDashboard() {
               getPropertyAddressLabel(selectedProperty) ||
               nextRow.property_text ||
               "";
+            nextRow.review_notes = removePropertyReviewNotes(
+              nextRow.review_notes
+            );
+            nextRow.needs_review = Boolean(nextRow.review_notes);
           }
         }
 
@@ -2088,6 +2123,170 @@ export default function AdminDashboard() {
       );
     } finally {
       setSavingAdminDraftUploadId("");
+    }
+  }
+
+  async function handleSubmitAdminDraftEntries(upload) {
+    if (!upload?.id) return;
+
+    const uploadWorker =
+      (workers || []).find((worker) => {
+        return String(worker.id) === String(upload.worker_id);
+      }) || null;
+
+    if (!uploadWorker) {
+      setAdminDraftError(
+        "The worker for this upload was not found, so entries cannot be submitted."
+      );
+      return;
+    }
+
+    const rowsForUpload = getRenumberedAdminDraftRows(
+      paperDraftEntries.filter((row) => {
+        return String(row.upload_id) === String(upload.id);
+      })
+    );
+
+    if (rowsForUpload.length === 0) {
+      setAdminDraftError("There are no draft rows to submit.");
+      return;
+    }
+
+    // Validate every row: it needs a date, a vehicle, a property code that
+    // exists in the property list, both odometers, and miles.
+    const invalidRow = rowsForUpload.find((row) => {
+      const selectedProperty = findPropertyByCode(properties, row.property_code);
+
+      return (
+        !row.entry_date ||
+        !String(row.vehicle || "").trim() ||
+        !row.property_code ||
+        !selectedProperty ||
+        row.start_odometer === "" ||
+        row.start_odometer === null ||
+        row.start_odometer === undefined ||
+        row.end_odometer === "" ||
+        row.end_odometer === null ||
+        row.end_odometer === undefined ||
+        row.miles === "" ||
+        row.miles === null ||
+        row.miles === undefined
+      );
+    });
+
+    if (invalidRow) {
+      setAdminDraftError(
+        `Entry #${invalidRow.entry_number || "?"} is not ready. Every row needs a date, a vehicle, a property code from the property list, start odo, end odo, and miles. Please review and edit before finalizing.`
+      );
+      return;
+    }
+
+    // Company vehicles must continue from the vehicle's last recorded
+    // odometer (or include an override reason). Personal vehicles skip this.
+    const odometerPlan = buildAdminDraftOdometerPlan({
+      rows: rowsForUpload,
+      states: vehicleOdometerStates,
+      worker: uploadWorker,
+    });
+
+    const blockedOdometerRow = rowsForUpload.find((row) => {
+      const plan = odometerPlan.get(String(row.id));
+      return (
+        plan?.requiresOverride &&
+        !String(row.odometer_override_reason || "").trim()
+      );
+    });
+
+    if (blockedOdometerRow) {
+      const plan = odometerPlan.get(String(blockedOdometerRow.id));
+      setAdminDraftError(
+        `Entry #${blockedOdometerRow.entry_number || "?"} starts at ${
+          blockedOdometerRow.start_odometer
+        }, but ${plan.vehicleName} is already at ${
+          plan.expectedStartOdometer
+        }. Fix the start odometer or enter an override reason before submitting.`
+      );
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Submit ${rowsForUpload.length} rows as final mileage entries for ${
+        uploadWorker.full_name || uploadWorker.email || "this worker"
+      }? Entries are recorded to the matching month based on each row's date.`
+    );
+
+    if (!confirmed) return;
+
+    setSubmittingAdminDraftUploadId(upload.id);
+    setAdminDraftError("");
+    setAdminDraftSuccess("");
+
+    try {
+      // Persist any unsaved edits first so drafts and finals match.
+      await handleSaveAdminDraftRows(upload);
+
+      const monthKeys = new Set();
+
+      for (const row of rowsForUpload) {
+        const selectedProperty = findPropertyByCode(
+          properties,
+          row.property_code
+        );
+        const plan = odometerPlan.get(String(row.id));
+
+        await saveWorkerMileageEntry({
+          profile: uploadWorker,
+          entryDate: row.entry_date,
+          vehicleName: formatVehicleNameForDisplay(row.vehicle, uploadWorker),
+          vehicleId: "",
+          propertyCode: selectedProperty.property_code,
+          propertyDisplay:
+            selectedProperty.display_label ||
+            selectedProperty.display_name ||
+            selectedProperty.property_code,
+          startOdometer: row.start_odometer,
+          endOdometer: row.end_odometer,
+          expectedStartOdometer:
+            plan?.isSharedVehicle &&
+            plan?.expectedStartOdometer !== undefined &&
+            plan?.expectedStartOdometer !== ""
+              ? plan.expectedStartOdometer
+              : row.start_odometer,
+          odometerOverrideReason: row.odometer_override_reason || "",
+          purpose: row.purpose || "",
+        });
+
+        monthKeys.add(String(row.entry_date).slice(0, 7));
+      }
+
+      const { error: uploadUpdateError } = await supabase
+        .from("paper_sheet_uploads")
+        .update({
+          ai_status: "submitted",
+          status: "converted",
+        })
+        .eq("id", upload.id);
+
+      if (uploadUpdateError) throw uploadUpdateError;
+
+      await Promise.all([refreshPaperUploads(), refreshPaperDraftEntries()]);
+
+      const monthList = Array.from(monthKeys).sort().join(", ");
+      setAdminDraftSuccess(
+        `Submitted ${rowsForUpload.length} final mileage entries for ${
+          uploadWorker.full_name || uploadWorker.email || "the worker"
+        } (recorded under: ${monthList}).`
+      );
+    } catch (error) {
+      console.error(error);
+      setAdminDraftError(
+        getFriendlySupabaseError(
+          error,
+          "Unable to submit draft rows as final mileage entries."
+        )
+      );
+    } finally {
+      setSubmittingAdminDraftUploadId("");
     }
   }
 
@@ -2477,9 +2676,12 @@ export default function AdminDashboard() {
                 onDeleteDraftRow={handleDeleteAdminDraftRow}
                 onSaveDraftRows={handleSaveAdminDraftRows}
                 savingDraftUploadId={savingAdminDraftUploadId}
+                onSubmitDraftEntries={handleSubmitAdminDraftEntries}
+                submittingDraftUploadId={submittingAdminDraftUploadId}
                 draftError={adminDraftError}
                 draftSuccess={adminDraftSuccess}
                 draftVehicleOptions={adminDraftVehicleOptions}
+                draftOdometerPlan={adminDraftOdometerPlan}
               />
             )}
 
@@ -4509,9 +4711,12 @@ function PaperSheetsReviewView({
   onDeleteDraftRow,
   onSaveDraftRows,
   savingDraftUploadId,
+  onSubmitDraftEntries,
+  submittingDraftUploadId,
   draftError,
   draftSuccess,
   draftVehicleOptions = [],
+  draftOdometerPlan = new Map(),
 }) {
   const totalUploaded = allUploads.length;
   const reviewingCount = allUploads.filter((upload) => {
@@ -4945,6 +5150,17 @@ function PaperSheetsReviewView({
 
               <button
                 type="button"
+                disabled={submittingDraftUploadId === selectedUpload.id}
+                onClick={() => onSubmitDraftEntries(selectedUpload)}
+                className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-black text-white shadow-lg shadow-emerald-100 transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {submittingDraftUploadId === selectedUpload.id
+                  ? "Submitting..."
+                  : "Submit As Final Entries"}
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setSelectedUploadId("")}
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
               >
@@ -5090,6 +5306,41 @@ function PaperSheetsReviewView({
                           placeholder="Start"
                           className="w-[110px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                         />
+                        {(() => {
+                          const plan = draftOdometerPlan.get(String(row.id));
+
+                          if (!plan?.isSharedVehicle) return null;
+
+                          return (
+                            <div className="mt-2 w-[180px]">
+                              <p className="text-xs font-semibold text-slate-500">
+                                Expected: {plan.expectedStartOdometer}
+                              </p>
+
+                              {plan.requiresOverride && (
+                                <>
+                                  <p className="mt-1 text-xs font-black text-amber-700">
+                                    Below the vehicle's last odometer. Fix it
+                                    or give an override reason.
+                                  </p>
+                                  <textarea
+                                    rows="2"
+                                    value={row.odometer_override_reason || ""}
+                                    onChange={(event) =>
+                                      onDraftRowChange(
+                                        row.id,
+                                        "odometer_override_reason",
+                                        event.target.value
+                                      )
+                                    }
+                                    placeholder="Override reason..."
+                                    className="mt-1 w-full resize-none rounded-xl border border-amber-300 bg-amber-50/40 px-3 py-2 text-xs text-slate-700 outline-none transition focus:border-amber-500 focus:ring-4 focus:ring-amber-100"
+                                  />
+                                </>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-4">
                         <input
@@ -5130,29 +5381,37 @@ function PaperSheetsReviewView({
                         />
                       </td>
                       <td className="px-4 py-4">
-                        <span
-                          className={
-                            "rounded-full px-3 py-1 text-xs font-black " +
-                            (row.review_notes
-                              ? "bg-red-50 text-red-700"
-                              : row.needs_review
-                                ? "bg-amber-50 text-amber-700"
-                                : "bg-emerald-50 text-emerald-700")
+                        {(() => {
+                          const propertyIsValid = Boolean(
+                            findPropertyByCode(properties, row.property_code)
+                          );
+
+                          if (propertyIsValid) {
+                            return (
+                              <span
+                                title={row.review_notes || ""}
+                                className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700"
+                              >
+                                OK
+                              </span>
+                            );
                           }
-                        >
-                          {row.needs_review ? "Review" : "OK"}
-                        </span>
-                        {row.review_notes && (
-                          <p className="mt-2 max-w-[240px] text-xs font-semibold leading-5 text-red-600">
-                            {row.review_notes}
-                          </p>
-                        )}
-                        {row.ai_confidence !== null &&
-                          row.ai_confidence !== undefined && (
-                            <p className="mt-1 text-xs font-semibold text-slate-400">
-                              Confidence: {Math.round(Number(row.ai_confidence) * 100)}%
-                            </p>
-                          )}
+
+                          return (
+                            <div>
+                              <span
+                                title={row.review_notes || ""}
+                                className="rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-700"
+                              >
+                                Review
+                              </span>
+                              <p className="mt-2 max-w-[200px] text-xs font-semibold leading-5 text-amber-700">
+                                Please review — edit the property code before
+                                finalizing.
+                              </p>
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-4">
                         <button
@@ -5210,6 +5469,17 @@ function PaperSheetsReviewView({
                 {savingDraftUploadId === selectedUpload.id
                   ? "Saving..."
                   : "Save Rows"}
+              </button>
+
+              <button
+                type="button"
+                disabled={submittingDraftUploadId === selectedUpload.id}
+                onClick={() => onSubmitDraftEntries(selectedUpload)}
+                className="rounded-2xl bg-emerald-600 px-5 py-2 text-sm font-black text-white shadow-lg shadow-emerald-100 transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {submittingDraftUploadId === selectedUpload.id
+                  ? "Submitting..."
+                  : "Submit As Final Entries"}
               </button>
             </div>
           )}
@@ -6783,6 +7053,102 @@ function getDraftRowPropertyAddress(row, properties) {
     row?.property_code ||
     "—"
   );
+}
+
+function removePropertyReviewNotes(reviewNotes) {
+  return String(reviewNotes || "")
+    .split(";")
+    .map((note) => note.trim())
+    .filter(Boolean)
+    .filter((note) => {
+      const lowerNote = note.toLowerCase();
+      return (
+        !lowerNote.includes("property") &&
+        !lowerNote.includes("reference list") &&
+        !lowerNote.includes("could not match")
+      );
+    })
+    .join("; ");
+}
+
+function toDraftNumberOrNull(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const numberValue = Number(value);
+  return Number.isNaN(numberValue) ? null : numberValue;
+}
+
+// Mirrors the worker dashboard's odometer plan: company (shared) vehicles
+// must continue from the vehicle's last recorded odometer, chaining row to
+// row within the same sheet. Personal vehicles are never checked.
+function buildAdminDraftOdometerPlan({ rows = [], states = [], worker = null }) {
+  const planMap = new Map();
+  const expectedByVehicle = new Map();
+
+  const sortedRows = [...(rows || [])].sort((first, second) => {
+    const firstEntry = Number(first.entry_number || 0);
+    const secondEntry = Number(second.entry_number || 0);
+
+    if (firstEntry !== secondEntry) return firstEntry - secondEntry;
+
+    return String(first.entry_date || "").localeCompare(
+      String(second.entry_date || "")
+    );
+  });
+
+  sortedRows.forEach((row) => {
+    const vehicleName = formatVehicleNameForDisplay(row.vehicle, worker);
+
+    if (!vehicleName) {
+      planMap.set(String(row.id), {
+        isSharedVehicle: false,
+        requiresOverride: false,
+        vehicleName: "",
+        expectedStartOdometer: "",
+      });
+      return;
+    }
+
+    const baseline = getExpectedVehicleStart({
+      states,
+      vehicle: null,
+      vehicleName,
+      fallbackOdometer: "",
+    });
+
+    if (!baseline.isSharedVehicle) {
+      planMap.set(String(row.id), {
+        isSharedVehicle: false,
+        requiresOverride: false,
+        vehicleName,
+        expectedStartOdometer: "",
+      });
+      return;
+    }
+
+    const vehicleKey = vehicleName.trim().toLowerCase();
+    const expectedStartOdometer = expectedByVehicle.has(vehicleKey)
+      ? expectedByVehicle.get(vehicleKey)
+      : String(baseline.expectedStartOdometer || "0");
+    const expectedStart = toDraftNumberOrNull(expectedStartOdometer);
+    const start = toDraftNumberOrNull(row.start_odometer);
+    const end = toDraftNumberOrNull(row.end_odometer);
+
+    const requiresOverride =
+      expectedStart !== null && start !== null && start < expectedStart;
+
+    planMap.set(String(row.id), {
+      isSharedVehicle: true,
+      requiresOverride,
+      vehicleName,
+      expectedStartOdometer,
+    });
+
+    if (start !== null && end !== null && end >= start) {
+      expectedByVehicle.set(vehicleKey, String(end));
+    }
+  });
+
+  return planMap;
 }
 
 function getSortedAdminDraftRows(rows = []) {
