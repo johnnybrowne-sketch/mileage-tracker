@@ -228,6 +228,31 @@ export default function AdminDashboard() {
   const [paperDraftEntries, setPaperDraftEntries] = useState([]);
   const [selectedPaperUploadId, setSelectedPaperUploadId] = useState("");
   const [convertingPaperUploadId, setConvertingPaperUploadId] = useState("");
+  const [savingAdminDraftUploadId, setSavingAdminDraftUploadId] = useState("");
+  const [adminDraftError, setAdminDraftError] = useState("");
+  const [adminDraftSuccess, setAdminDraftSuccess] = useState("");
+
+  const adminDraftVehicleOptions = useMemo(() => {
+    const selectedUpload = (paperUploads || []).find((upload) => {
+      return String(upload.id) === String(selectedPaperUploadId);
+    });
+
+    if (!selectedUpload?.worker_id) return [];
+
+    const uploadWorker =
+      (workers || []).find((worker) => {
+        return String(worker.id) === String(selectedUpload.worker_id);
+      }) || null;
+
+    if (!uploadWorker) return [];
+
+    return getVehicleOptionsForWorker({
+      worker: uploadWorker,
+      workers,
+      vehicles,
+      assignments,
+    }).filter((vehicleName) => vehicleName !== "all");
+  }, [selectedPaperUploadId, paperUploads, workers, vehicles, assignments]);
 
   const workerMap = useMemo(() => {
     const map = new Map();
@@ -1871,6 +1896,201 @@ export default function AdminDashboard() {
     }
   }
 
+  function handleAdminDraftRowChange(rowId, field, value) {
+    setPaperDraftEntries((currentRows) => {
+      const targetRow = currentRows.find(
+        (row) => String(row.id) === String(rowId)
+      );
+
+      // Choosing a vehicle applies it to every row of the same paper sheet.
+      if (field === "vehicle" && targetRow) {
+        return currentRows.map((row) => {
+          if (String(row.upload_id) !== String(targetRow.upload_id)) return row;
+          return { ...row, vehicle: value };
+        });
+      }
+
+      return currentRows.map((row) => {
+        if (String(row.id) !== String(rowId)) return row;
+
+        const cleanValue = value;
+        const nextRow = { ...row, [field]: cleanValue };
+
+        if (field === "property_code") {
+          const selectedProperty = findPropertyByCode(properties, cleanValue);
+
+          if (selectedProperty) {
+            nextRow.property_code = selectedProperty.property_code;
+            nextRow.property_text =
+              getPropertyAddressLabel(selectedProperty) ||
+              nextRow.property_text ||
+              "";
+          }
+        }
+
+        if (field === "start_odometer" || field === "end_odometer") {
+          const start = Number(
+            field === "start_odometer" ? cleanValue : nextRow.start_odometer
+          );
+          const end = Number(
+            field === "end_odometer" ? cleanValue : nextRow.end_odometer
+          );
+
+          if (!Number.isNaN(start) && !Number.isNaN(end) && end >= start) {
+            nextRow.miles = end - start;
+          }
+        }
+
+        return nextRow;
+      });
+    });
+
+    setAdminDraftError("");
+    setAdminDraftSuccess("");
+  }
+
+  function handleAddAdminDraftRow(upload) {
+    if (!upload?.id) return;
+
+    const uploadRows = getRenumberedAdminDraftRows(
+      paperDraftEntries.filter((row) => {
+        return String(row.upload_id) === String(upload.id);
+      })
+    );
+
+    const lastRow = uploadRows[uploadRows.length - 1];
+
+    const newRow = {
+      id: "new-" + Date.now(),
+      upload_id: upload.id,
+      worker_id: upload.worker_id,
+      entry_number: uploadRows.length + 1,
+      entry_date: "",
+      vehicle: lastRow?.vehicle || "",
+      property_text: "",
+      property_code: "",
+      start_odometer: "",
+      end_odometer: "",
+      miles: "",
+      purpose: "",
+      ai_confidence: null,
+      needs_review: true,
+      is_new: true,
+    };
+
+    setPaperDraftEntries((currentRows) =>
+      renumberAdminDraftRowsForUpload([...currentRows, newRow], upload.id)
+    );
+    setAdminDraftError("");
+    setAdminDraftSuccess("");
+  }
+
+  async function handleDeleteAdminDraftRow(row) {
+    const confirmed = window.confirm("Delete this draft row?");
+
+    if (!confirmed) return;
+
+    setAdminDraftError("");
+    setAdminDraftSuccess("");
+
+    try {
+      if (String(row.id).startsWith("new-")) {
+        setPaperDraftEntries((currentRows) =>
+          renumberAdminDraftRowsForUpload(
+            currentRows.filter((item) => String(item.id) !== String(row.id)),
+            row.upload_id
+          )
+        );
+        return;
+      }
+
+      const { error } = await supabase
+        .from("paper_sheet_draft_entries")
+        .delete()
+        .eq("id", row.id);
+
+      if (error) throw error;
+
+      setPaperDraftEntries((currentRows) =>
+        renumberAdminDraftRowsForUpload(
+          currentRows.filter((item) => String(item.id) !== String(row.id)),
+          row.upload_id
+        )
+      );
+      await renumberAdminDraftRowsInDatabase(row.upload_id);
+      await refreshPaperDraftEntries();
+      setAdminDraftSuccess("Draft row deleted.");
+    } catch (error) {
+      console.error(error);
+      setAdminDraftError(
+        getFriendlySupabaseError(error, "Unable to delete draft row.")
+      );
+    }
+  }
+
+  async function handleSaveAdminDraftRows(upload) {
+    if (!upload?.id) return;
+
+    const rowsForUpload = getRenumberedAdminDraftRows(
+      paperDraftEntries.filter((row) => {
+        return String(row.upload_id) === String(upload.id);
+      })
+    );
+
+    setSavingAdminDraftUploadId(upload.id);
+    setAdminDraftError("");
+    setAdminDraftSuccess("");
+
+    try {
+      const existingRows = rowsForUpload.filter((row) => {
+        return !String(row.id).startsWith("new-");
+      });
+
+      const newRows = rowsForUpload.filter((row) => {
+        return String(row.id).startsWith("new-");
+      });
+
+      await Promise.all(
+        existingRows.map((row) => {
+          return supabase
+            .from("paper_sheet_draft_entries")
+            .update(buildAdminDraftEntryPayload(row))
+            .eq("id", row.id);
+        })
+      ).then((results) => {
+        const failedResult = results.find((result) => result.error);
+
+        if (failedResult?.error) {
+          throw failedResult.error;
+        }
+      });
+
+      if (newRows.length > 0) {
+        const { error: insertError } = await supabase
+          .from("paper_sheet_draft_entries")
+          .insert(
+            newRows.map((row) => ({
+              ...buildAdminDraftEntryPayload(row),
+              upload_id: upload.id,
+              worker_id: row.worker_id || upload.worker_id,
+            }))
+          );
+
+        if (insertError) throw insertError;
+      }
+
+      await refreshPaperDraftEntries();
+      setAdminDraftSuccess("Draft rows saved for the worker.");
+    } catch (error) {
+      console.error(error);
+      setAdminDraftError(
+        getFriendlySupabaseError(error, "Unable to save draft rows.")
+      );
+    } finally {
+      setSavingAdminDraftUploadId("");
+    }
+  }
+
   async function handleConvertPaperUploadAsAdmin(upload) {
     if (!upload?.id) {
       setPaperUploadError("Upload is missing.");
@@ -2252,6 +2472,14 @@ export default function AdminDashboard() {
                 onUpdateUpload={handleUpdatePaperUpload}
                 onDeleteUpload={handleDeletePaperUpload}
                 onConvertUpload={handleConvertPaperUploadAsAdmin}
+                onDraftRowChange={handleAdminDraftRowChange}
+                onAddDraftRow={handleAddAdminDraftRow}
+                onDeleteDraftRow={handleDeleteAdminDraftRow}
+                onSaveDraftRows={handleSaveAdminDraftRows}
+                savingDraftUploadId={savingAdminDraftUploadId}
+                draftError={adminDraftError}
+                draftSuccess={adminDraftSuccess}
+                draftVehicleOptions={adminDraftVehicleOptions}
               />
             )}
 
@@ -4276,6 +4504,14 @@ function PaperSheetsReviewView({
   onUpdateUpload,
   onDeleteUpload,
   onConvertUpload,
+  onDraftRowChange,
+  onAddDraftRow,
+  onDeleteDraftRow,
+  onSaveDraftRows,
+  savingDraftUploadId,
+  draftError,
+  draftSuccess,
+  draftVehicleOptions = [],
 }) {
   const totalUploaded = allUploads.length;
   const reviewingCount = allUploads.filter((upload) => {
@@ -4289,6 +4525,10 @@ function PaperSheetsReviewView({
     uploads.find((upload) => String(upload.id) === String(selectedUploadId)) ||
     allUploads.find((upload) => String(upload.id) === String(selectedUploadId)) ||
     null;
+
+  const selectedUploadWorker = selectedUpload
+    ? getWorkerForUpload(selectedUpload, workerMap)
+    : null;
 
   const selectedDraftRows = selectedUpload
     ? draftEntries
@@ -4680,17 +4920,49 @@ function PaperSheetsReviewView({
             <SectionTitle
               eyebrow="AI Draft Rows"
               title={selectedUpload.file_name}
-              text="These are the rows extracted by AI. Workers can edit and submit these as final mileage entries from their dashboard."
+              text="These are the rows extracted by AI. You can edit, add, or delete rows here as admin. Selecting a vehicle in any row applies it to the whole sheet. Workers can also edit and submit these as final mileage entries from their dashboard."
             />
 
-            <button
-              type="button"
-              onClick={() => setSelectedUploadId("")}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
-            >
-              Close Rows
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => onAddDraftRow(selectedUpload)}
+                className="rounded-2xl bg-blue-50 px-4 py-2 text-sm font-black text-blue-700 shadow-sm transition hover:bg-blue-100"
+              >
+                + Add Row
+              </button>
+
+              <button
+                type="button"
+                disabled={savingDraftUploadId === selectedUpload.id}
+                onClick={() => onSaveDraftRows(selectedUpload)}
+                className="rounded-2xl bg-[#2f8fc8] px-4 py-2 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-[#1f6f9f] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingDraftUploadId === selectedUpload.id
+                  ? "Saving..."
+                  : "Save Rows"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedUploadId("")}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                Close Rows
+              </button>
+            </div>
           </div>
+
+          {draftError && (
+            <div className="mt-5">
+              <AlertBox type="error" message={draftError} />
+            </div>
+          )}
+          {draftSuccess && (
+            <div className="mt-5">
+              <AlertBox type="success" message={draftSuccess} />
+            </div>
+          )}
 
           <div className="mt-5 grid gap-4 md:grid-cols-3">
             <ReportFilterLabel
@@ -4723,6 +4995,7 @@ function PaperSheetsReviewView({
                   <TableHeader>Miles</TableHeader>
                   <TableHeader>Purpose</TableHeader>
                   <TableHeader>Review</TableHeader>
+                  <TableHeader>Actions</TableHeader>
                 </tr>
               </thead>
 
@@ -4733,29 +5006,128 @@ function PaperSheetsReviewView({
                       <td className="px-4 py-4 font-black text-slate-950">
                         {rowIndex + 1}
                       </td>
-                      <td className="px-4 py-4 text-slate-700">
-                        {formatDate(row.entry_date)}
+                      <td className="px-4 py-4">
+                        <input
+                          type="date"
+                          value={row.entry_date || ""}
+                          onChange={(event) =>
+                            onDraftRowChange(row.id, "entry_date", event.target.value)
+                          }
+                          className="w-[150px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                        />
                       </td>
-                      <td className="px-4 py-4 text-slate-700">
-                        {row.vehicle || "—"}
+                      <td className="px-4 py-4">
+                        <select
+                          value={
+                            formatVehicleNameForDisplay(
+                              row.vehicle,
+                              selectedUploadWorker
+                            ) || ""
+                          }
+                          onChange={(event) =>
+                            onDraftRowChange(row.id, "vehicle", event.target.value)
+                          }
+                          title="Choosing a vehicle applies it to all rows on this sheet"
+                          className="w-[200px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                        >
+                          <option value="">Select vehicle</option>
+                          {(() => {
+                            const rowVehicleDisplay = formatVehicleNameForDisplay(
+                              row.vehicle,
+                              selectedUploadWorker
+                            );
+
+                            if (
+                              rowVehicleDisplay &&
+                              !draftVehicleOptions.includes(rowVehicleDisplay)
+                            ) {
+                              return (
+                                <option value={rowVehicleDisplay}>
+                                  {rowVehicleDisplay} (scanned)
+                                </option>
+                              );
+                            }
+
+                            return null;
+                          })()}
+                          {draftVehicleOptions.map((vehicleName) => (
+                            <option key={vehicleName} value={vehicleName}>
+                              {vehicleName}
+                            </option>
+                          ))}
+                        </select>
                       </td>
-                      <td className="px-4 py-4 font-black text-slate-950">
-                        {row.property_code || "—"}
+                      <td className="px-4 py-4">
+                        <input
+                          type="text"
+                          list="admin-draft-property-codes"
+                          value={row.property_code || ""}
+                          onChange={(event) =>
+                            onDraftRowChange(
+                              row.id,
+                              "property_code",
+                              event.target.value
+                            )
+                          }
+                          placeholder="Code"
+                          className="w-[110px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-950 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                        />
                       </td>
                       <td className="max-w-[280px] px-4 py-4 text-slate-700">
                         {getDraftRowPropertyAddress(row, properties)}
                       </td>
-                      <td className="px-4 py-4 text-slate-700">
-                        {row.start_odometer || "—"}
+                      <td className="px-4 py-4">
+                        <input
+                          type="number"
+                          value={row.start_odometer ?? ""}
+                          onChange={(event) =>
+                            onDraftRowChange(
+                              row.id,
+                              "start_odometer",
+                              event.target.value
+                            )
+                          }
+                          placeholder="Start"
+                          className="w-[110px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                        />
                       </td>
-                      <td className="px-4 py-4 text-slate-700">
-                        {row.end_odometer || "—"}
+                      <td className="px-4 py-4">
+                        <input
+                          type="number"
+                          value={row.end_odometer ?? ""}
+                          onChange={(event) =>
+                            onDraftRowChange(
+                              row.id,
+                              "end_odometer",
+                              event.target.value
+                            )
+                          }
+                          placeholder="End"
+                          className="w-[110px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                        />
                       </td>
-                      <td className="px-4 py-4 font-black text-slate-950">
-                        {formatMiles(row.miles || 0)}
+                      <td className="px-4 py-4">
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={row.miles ?? ""}
+                          onChange={(event) =>
+                            onDraftRowChange(row.id, "miles", event.target.value)
+                          }
+                          placeholder="Miles"
+                          className="w-[100px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-950 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                        />
                       </td>
-                      <td className="max-w-[320px] px-4 py-4 text-slate-700">
-                        {row.purpose || "—"}
+                      <td className="px-4 py-4">
+                        <textarea
+                          rows="2"
+                          value={row.purpose || ""}
+                          onChange={(event) =>
+                            onDraftRowChange(row.id, "purpose", event.target.value)
+                          }
+                          placeholder="Purpose"
+                          className="w-[220px] resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                        />
                       </td>
                       <td className="px-4 py-4">
                         <span
@@ -4782,14 +5154,24 @@ function PaperSheetsReviewView({
                             </p>
                           )}
                       </td>
+                      <td className="px-4 py-4">
+                        <button
+                          type="button"
+                          onClick={() => onDeleteDraftRow(row)}
+                          className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100"
+                        >
+                          <Trash2 size={14} />
+                          Delete
+                        </button>
+                      </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan="10" className="px-6 py-12">
+                    <td colSpan="11" className="px-6 py-12">
                       <EmptyState
                         title="No Draft Rows Yet"
-                        text="Open the uploaded document for manual review, or scan it with AI when ready."
+                        text="Scan the sheet with AI, or click + Add Row to enter rows manually for the worker."
                       />
                     </td>
                   </tr>
@@ -4797,6 +5179,40 @@ function PaperSheetsReviewView({
               </tbody>
             </table>
           </div>
+
+          <datalist id="admin-draft-property-codes">
+            {(properties || []).map((property) => (
+              <option
+                key={property.id || property.property_code}
+                value={property.property_code}
+              >
+                {getPropertyAddressLabel(property) || property.property_code}
+              </option>
+            ))}
+          </datalist>
+
+          {selectedDraftRows.length > 0 && (
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => onAddDraftRow(selectedUpload)}
+                className="rounded-2xl bg-blue-50 px-4 py-2 text-sm font-black text-blue-700 shadow-sm transition hover:bg-blue-100"
+              >
+                + Add Row
+              </button>
+
+              <button
+                type="button"
+                disabled={savingDraftUploadId === selectedUpload.id}
+                onClick={() => onSaveDraftRows(selectedUpload)}
+                className="rounded-2xl bg-[#2f8fc8] px-5 py-2 text-sm font-black text-white shadow-lg shadow-blue-100 transition hover:bg-[#1f6f9f] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingDraftUploadId === selectedUpload.id
+                  ? "Saving..."
+                  : "Save Rows"}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -6367,6 +6783,92 @@ function getDraftRowPropertyAddress(row, properties) {
     row?.property_code ||
     "—"
   );
+}
+
+function getSortedAdminDraftRows(rows = []) {
+  return [...rows].sort((first, second) => {
+    const firstNumber = Number(first.entry_number || 0);
+    const secondNumber = Number(second.entry_number || 0);
+
+    if (firstNumber !== secondNumber) return firstNumber - secondNumber;
+
+    return String(first.created_at || "").localeCompare(
+      String(second.created_at || "")
+    );
+  });
+}
+
+function getRenumberedAdminDraftRows(rows = []) {
+  return getSortedAdminDraftRows(rows).map((row, index) => ({
+    ...row,
+    entry_number: index + 1,
+  }));
+}
+
+function renumberAdminDraftRowsForUpload(rows = [], uploadId) {
+  const renumberedRows = getRenumberedAdminDraftRows(
+    rows.filter((row) => String(row.upload_id) === String(uploadId))
+  );
+  const renumberedById = new Map(
+    renumberedRows.map((row) => [String(row.id), row])
+  );
+
+  return rows.map((row) => renumberedById.get(String(row.id)) || row);
+}
+
+async function renumberAdminDraftRowsInDatabase(uploadId) {
+  if (!uploadId) return;
+
+  const { data, error } = await supabase
+    .from("paper_sheet_draft_entries")
+    .select("id, upload_id, entry_number, entry_date, created_at")
+    .eq("upload_id", uploadId)
+    .order("entry_number", { ascending: true });
+
+  if (error) throw error;
+
+  const renumberedRows = getRenumberedAdminDraftRows(data || []);
+
+  await Promise.all(
+    renumberedRows.map((row) => {
+      return supabase
+        .from("paper_sheet_draft_entries")
+        .update({ entry_number: row.entry_number })
+        .eq("id", row.id);
+    })
+  ).then((results) => {
+    const failedResult = results.find((result) => result.error);
+
+    if (failedResult?.error) {
+      throw failedResult.error;
+    }
+  });
+}
+
+function buildAdminDraftEntryPayload(row) {
+  return {
+    entry_number: row.entry_number === "" ? null : Number(row.entry_number),
+    entry_date: row.entry_date || null,
+    vehicle: row.vehicle || "",
+    property_text: row.property_text || "",
+    property_code: row.property_code || "",
+    start_odometer:
+      row.start_odometer === "" || row.start_odometer === null
+        ? null
+        : Number(row.start_odometer),
+    end_odometer:
+      row.end_odometer === "" || row.end_odometer === null
+        ? null
+        : Number(row.end_odometer),
+    miles: row.miles === "" || row.miles === null ? null : Number(row.miles),
+    purpose: row.purpose || "",
+    review_notes: row.review_notes || null,
+    ai_confidence:
+      row.ai_confidence === "" || row.ai_confidence === null
+        ? null
+        : Number(row.ai_confidence),
+    needs_review: Boolean(row.needs_review || row.review_notes),
+  };
 }
 
 function getMileageSummary(entryRows) {

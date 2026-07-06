@@ -1,10 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
+import { PDFDocument } from "https://esm.sh/pdf-lib@1.17.1";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
-const MAX_SCAN_OUTPUT_TOKENS = 12000;
+const MAX_SCAN_OUTPUT_TOKENS = 16000;
+const PAGE_SCAN_CONCURRENCY = 3;
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
@@ -60,16 +62,29 @@ Deno.serve(async (request) => {
 
     const mediaType =
       upload.file_type || fileBlob.type || inferMediaType(upload.file_name);
-    const base64File = arrayBufferToBase64(await fileBlob.arrayBuffer());
+    const fileBuffer = await fileBlob.arrayBuffer();
     const properties = await loadPropertyReferences(supabase);
-    const claudeResult = await scanMileageSheetWithClaude({
-      apiKey: anthropicApiKey,
-      model,
-      base64File,
-      mediaType,
-      upload,
-      properties,
-    });
+
+    let claudeResult: Record<string, unknown>;
+
+    if (mediaType === "application/pdf") {
+      claudeResult = await scanPdfPageByPage({
+        apiKey: anthropicApiKey,
+        model,
+        fileBuffer,
+        upload,
+        properties,
+      });
+    } else {
+      claudeResult = await scanMileageSheetWithClaude({
+        apiKey: anthropicApiKey,
+        model,
+        base64File: arrayBufferToBase64(fileBuffer),
+        mediaType,
+        upload,
+        properties,
+      });
+    }
 
     const rows = normalizeRows({
       result: claudeResult,
@@ -153,6 +168,173 @@ Deno.serve(async (request) => {
   }
 });
 
+async function scanPdfPageByPage({
+  apiKey,
+  model,
+  fileBuffer,
+  upload,
+  properties,
+}: {
+  apiKey: string;
+  model: string;
+  fileBuffer: ArrayBuffer;
+  upload: Record<string, unknown>;
+  properties: Array<Record<string, string>>;
+}) {
+  let pdfDoc: PDFDocument;
+
+  try {
+    pdfDoc = await PDFDocument.load(fileBuffer, { ignoreEncryption: true });
+  } catch (error) {
+    console.warn(
+      "pdf-lib could not read the PDF; falling back to whole-file scan.",
+      error
+    );
+    return await scanMileageSheetWithClaude({
+      apiKey,
+      model,
+      base64File: arrayBufferToBase64(fileBuffer),
+      mediaType: "application/pdf",
+      upload,
+      properties,
+    });
+  }
+
+  const pageCount = pdfDoc.getPageCount();
+
+  if (pageCount <= 1) {
+    return await scanMileageSheetWithClaude({
+      apiKey,
+      model,
+      base64File: arrayBufferToBase64(fileBuffer),
+      mediaType: "application/pdf",
+      upload,
+      properties,
+    });
+  }
+
+  // Split every page into its own single-page PDF so each AI request
+  // only ever needs to return one page of rows. This keeps responses
+  // small regardless of how many pages the uploaded sheet has.
+  const pageBase64List: string[] = [];
+
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    const singlePageDoc = await PDFDocument.create();
+    const [copiedPage] = await singlePageDoc.copyPages(pdfDoc, [pageIndex]);
+    singlePageDoc.addPage(copiedPage);
+    const pageBytes = await singlePageDoc.save();
+    pageBase64List.push(
+      arrayBufferToBase64(
+        pageBytes.buffer.slice(
+          pageBytes.byteOffset,
+          pageBytes.byteOffset + pageBytes.byteLength
+        )
+      )
+    );
+  }
+
+  const pageResults: Array<Record<string, unknown> | null> = new Array(
+    pageCount
+  ).fill(null);
+  const pageErrors: string[] = [];
+
+  for (
+    let batchStart = 0;
+    batchStart < pageCount;
+    batchStart += PAGE_SCAN_CONCURRENCY
+  ) {
+    const batchIndexes = [];
+
+    for (
+      let index = batchStart;
+      index < Math.min(batchStart + PAGE_SCAN_CONCURRENCY, pageCount);
+      index += 1
+    ) {
+      batchIndexes.push(index);
+    }
+
+    await Promise.all(
+      batchIndexes.map(async (pageIndex) => {
+        try {
+          pageResults[pageIndex] = await scanMileageSheetWithClaude({
+            apiKey,
+            model,
+            base64File: pageBase64List[pageIndex],
+            mediaType: "application/pdf",
+            upload,
+            properties,
+            pageNumber: pageIndex + 1,
+            pageCount,
+          });
+        } catch (error) {
+          console.error(`Page ${pageIndex + 1} scan failed.`, error);
+          pageErrors.push(
+            `Page ${pageIndex + 1}: ${getErrorMessage(error)}`
+          );
+        }
+      })
+    );
+  }
+
+  if (pageResults.every((result) => result === null)) {
+    throw new Error(
+      "AI scan failed for every page of the PDF. " + pageErrors.join(" | ")
+    );
+  }
+
+  // Merge page results into one combined result.
+  const combinedRows: Array<Record<string, unknown>> = [];
+  let driver = "";
+  let vehicle = "";
+  const warnings: string[] = [...pageErrors];
+
+  pageResults.forEach((result, pageIndex) => {
+    if (!result) {
+      warnings.push(
+        `Page ${pageIndex + 1} could not be scanned and was skipped.`
+      );
+      return;
+    }
+
+    if (!driver && result.driver) driver = String(result.driver);
+    if (!vehicle && result.vehicle) vehicle = String(result.vehicle);
+
+    const rowsForPage = collectClaudeRows(result);
+
+    for (const row of rowsForPage) {
+      if (row && typeof row === "object") {
+        combinedRows.push({
+          page_number: pageIndex + 1,
+          ...(row as Record<string, unknown>),
+        });
+      }
+    }
+
+    const resultSummary = result.summary as
+      | Record<string, unknown>
+      | undefined;
+
+    if (Array.isArray(resultSummary?.warnings)) {
+      for (const warning of resultSummary.warnings) {
+        if (warning) warnings.push(`Page ${pageIndex + 1}: ${warning}`);
+      }
+    }
+  });
+
+  return {
+    driver,
+    vehicle,
+    rows: combinedRows,
+    summary: {
+      total_miles: combinedRows.reduce((total, row) => {
+        const miles = Number((row as Record<string, unknown>).miles || 0);
+        return total + (Number.isFinite(miles) ? miles : 0);
+      }, 0),
+      warnings,
+    },
+  };
+}
+
 async function scanMileageSheetWithClaude({
   apiKey,
   model,
@@ -160,6 +342,8 @@ async function scanMileageSheetWithClaude({
   mediaType,
   upload,
   properties,
+  pageNumber,
+  pageCount,
 }: {
   apiKey: string;
   model: string;
@@ -167,8 +351,14 @@ async function scanMileageSheetWithClaude({
   mediaType: string;
   upload: Record<string, unknown>;
   properties: Array<Record<string, string>>;
+  pageNumber?: number;
+  pageCount?: number;
 }) {
   const fileBlock = buildClaudeFileBlock({ base64File, mediaType });
+  const isSinglePageOfLargerPdf = Boolean(pageNumber && pageCount);
+  const pageContext = isSinglePageOfLargerPdf
+    ? `\nThis file is PAGE ${pageNumber} of ${pageCount} of one continuous mileage sheet. Extract ONLY the rows visible on this page. Number rows starting from 1 for this page; the app renumbers across pages.\n`
+    : "";
   const propertyReference = properties
     .slice(0, 900)
     .map((property) => {
@@ -187,7 +377,7 @@ async function scanMileageSheetWithClaude({
 
   const prompt = `
 You are scanning a Prosper Real Estate mileage recording paper sheet.
-
+${pageContext}
 Return ONLY valid JSON. Do not include markdown.
 
 Goal:
@@ -493,11 +683,86 @@ function parseClaudeJson(text: string) {
   const firstBrace = cleanText.indexOf("{");
   const lastBrace = cleanText.lastIndexOf("}");
 
-  if (firstBrace === -1 || lastBrace === -1) {
+  if (firstBrace === -1) {
     throw new Error("AI scan did not return JSON for the paper sheet scan.");
   }
 
-  return JSON.parse(cleanText.slice(firstBrace, lastBrace + 1));
+  if (lastBrace !== -1) {
+    try {
+      return JSON.parse(cleanText.slice(firstBrace, lastBrace + 1));
+    } catch {
+      // Fall through to truncation salvage below.
+    }
+  }
+
+  const salvaged = salvageTruncatedJson(cleanText.slice(firstBrace));
+
+  if (salvaged) {
+    return salvaged;
+  }
+
+  throw new Error(
+    "AI scan returned JSON that could not be parsed, even after attempting to repair a truncated response."
+  );
+}
+
+// If the model response was cut off mid-array (for example by the output
+// token limit), keep every complete row object and close the JSON so the
+// scan still succeeds with the rows that were fully returned.
+function salvageTruncatedJson(text: string) {
+  let depth = 0;
+  let inString = false;
+  let isEscaped = false;
+  let lastCompleteRowEnd = -1;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+
+    if (character === "\\") {
+      isEscaped = true;
+      continue;
+    }
+
+    if (character === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (character === "{" || character === "[") {
+      depth += 1;
+    } else if (character === "}" || character === "]") {
+      depth -= 1;
+
+      // depth 2 means we just closed an object inside the top-level
+      // "rows" array: { "rows": [ {...}<-- here
+      if (character === "}" && depth === 2) {
+        lastCompleteRowEnd = index;
+      }
+    }
+  }
+
+  if (lastCompleteRowEnd === -1) return null;
+
+  const candidate = text.slice(0, lastCompleteRowEnd + 1) + "]}";
+
+  try {
+    const parsed = JSON.parse(candidate);
+    console.warn(
+      "AI response was truncated. Salvaged " +
+        (Array.isArray(parsed.rows) ? parsed.rows.length : 0) +
+        " complete rows."
+    );
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeDate(value: unknown, monthKey: string) {
