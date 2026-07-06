@@ -1177,12 +1177,37 @@ export default function WorkerDashboard() {
     return freshDraftEntries;
   }
 
-  function handlePaperSheetFileChange(event) {
-    const file = event.target.files?.[0] || null;
-
-    setUploadFile(file);
+  function handleSelectedPaperSheetFile(file) {
     setUploadError("");
     setUploadSuccess("");
+
+    if (!file) {
+      setUploadFile(null);
+      return;
+    }
+
+    if (!isAllowedPaperSheetFile(file)) {
+      setUploadFile(null);
+      setUploadError("Please upload a JPG, PNG, WEBP, or PDF file.");
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setUploadFile(null);
+      setUploadError("File is too large. Maximum upload size is 10 MB.");
+      return;
+    }
+
+    setUploadFile(file);
+  }
+
+  function handlePaperSheetFileChange(event) {
+    handleSelectedPaperSheetFile(event.target.files?.[0] || null);
+  }
+
+  function handlePaperSheetFileDrop(event) {
+    event.preventDefault();
+    handleSelectedPaperSheetFile(event.dataTransfer.files?.[0] || null);
   }
 
   async function handleUploadPaperSheet(event) {
@@ -1258,8 +1283,10 @@ export default function WorkerDashboard() {
     } catch (error) {
       console.error(error);
       setUploadError(
-        error?.message ||
+        formatPaperSheetUploadError(
+          error,
           "Unable to upload paper sheet. Please check storage and RLS policies."
+        )
       );
     } finally {
       setUploadingSheet(false);
@@ -1915,6 +1942,7 @@ export default function WorkerDashboard() {
                 setUploadNotes={setUploadNotes}
                 uploadFile={uploadFile}
                 onFileChange={handlePaperSheetFileChange}
+                onFileDrop={handlePaperSheetFileDrop}
                 onUpload={handleUploadPaperSheet}
                 uploadingSheet={uploadingSheet}
                 uploadError={uploadError}
@@ -3839,6 +3867,7 @@ function UploadSheetView({
   setUploadNotes,
   uploadFile,
   onFileChange,
+  onFileDrop,
   onUpload,
   uploadingSheet,
   uploadError,
@@ -3886,16 +3915,20 @@ function UploadSheetView({
         />
 
         <form onSubmit={onUpload} className="mt-6 space-y-5">
-          <div className="rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/50 p-6 text-center">
+          <div
+            onDrop={onFileDrop}
+            onDragOver={(event) => event.preventDefault()}
+            className="rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/50 p-6 text-center transition hover:border-blue-300 hover:bg-blue-50"
+          >
             <FileUp className="mx-auto text-blue-600" size={42} />
 
             <h3 className="mt-4 text-lg font-black text-slate-950">
-              Choose Paper Sheet File
+              Choose Or Drop Paper Sheet File
             </h3>
 
             <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-600">
-              Accepted file types: JPG, PNG, WEBP, or PDF. Maximum file size is
-              10 MB.
+              Drag a JPG, PNG, WEBP, or PDF here, or choose it below. Maximum
+              file size is 10 MB.
             </p>
 
             <input
@@ -5689,6 +5722,20 @@ function isAllowedPaperSheetFile(file) {
   ];
 
   return allowedTypes.includes(file?.type);
+}
+
+function formatPaperSheetUploadError(error, fallbackMessage) {
+  const message = String(error?.message || "");
+  const lowerMessage = message.toLowerCase();
+
+  if (lowerMessage.includes("row-level security") || lowerMessage.includes("rls")) {
+    return (
+      "Supabase blocked this paper-sheet upload with Row Level Security. Run the paper-sheet upload RLS policy SQL for paper_sheet_uploads, paper_sheet_draft_entries, and the paper-sheets storage bucket, then try again. Original error: " +
+      (message || "RLS blocked the request.")
+    );
+  }
+
+  return message || fallbackMessage;
 }
 
 function sanitizeFileName(fileName) {

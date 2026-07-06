@@ -4,6 +4,7 @@ import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
+const MAX_SCAN_OUTPUT_TOKENS = 12000;
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
@@ -191,6 +192,9 @@ Return ONLY valid JSON. Do not include markdown.
 
 Goal:
 - Extract rows into the same fields used by the Mileage Tracker draft table.
+- If the uploaded file is a PDF, scan every page in page order, not only the first page.
+- Treat a multi-page PDF as one continuous mileage sheet and return every mileage row from every page.
+- Renumber the extracted rows continuously across the whole file. Do not restart entry numbers on each PDF page.
 - Use the uploaded sheet month (${upload.month_key || "unknown"}) to resolve short dates like 6/11/26.
 - If a handwritten word or number is unclear, put "not readable" in the field, set needs_review true, and explain in review_notes.
 - If property text is abbreviated, use the property reference list to pick the best property_code.
@@ -207,6 +211,7 @@ Expected JSON shape:
   "rows": [
     {
       "entry_number": 1,
+      "page_number": 1,
       "entry_date": "YYYY-MM-DD or empty",
       "vehicle": "string or empty",
       "property_text": "string or not readable",
@@ -226,6 +231,24 @@ Expected JSON shape:
   }
 }
 
+You may also return page-by-page rows for large PDFs:
+{
+  "driver": "",
+  "vehicle": "",
+  "pages": [
+    {
+      "page_number": 1,
+      "rows": []
+    }
+  ],
+  "summary": {
+    "total_miles": 0,
+    "warnings": []
+  }
+}
+
+If you use "pages", every row still needs the same row fields. The app will flatten pages into one editable table.
+
 Property reference list:
 ${propertyReference || "No property reference rows were available."}
 `;
@@ -239,7 +262,7 @@ ${propertyReference || "No property reference rows were available."}
     },
     body: JSON.stringify({
       model,
-      max_tokens: 6000,
+      max_tokens: MAX_SCAN_OUTPUT_TOKENS,
       temperature: 0,
       system:
         "You are a careful OCR and data-entry assistant. You extract mileage sheet rows accurately and flag uncertainty instead of guessing.",
@@ -321,7 +344,7 @@ function normalizeRows({
     properties.map((property) => String(property.property_code || ""))
   );
   const defaultVehicle = String(result.vehicle || "").trim();
-  const rows = Array.isArray(result.rows) ? result.rows : [];
+  const rows = collectClaudeRows(result);
 
   return rows.map((rawRow, index) => {
     const row = rawRow as Record<string, unknown>;
@@ -343,7 +366,7 @@ function normalizeRows({
     });
 
     return {
-      entry_number: toNumberOrNull(row.entry_number) || index + 1,
+      entry_number: index + 1,
       entry_date: normalizeDate(row.entry_date, String(upload.month_key || "")),
       vehicle: String(row.vehicle || defaultVehicle || "").trim(),
       property_text: String(row.property_text || "").trim(),
@@ -363,6 +386,36 @@ function normalizeRows({
         end === null ||
         miles === null,
     };
+  });
+}
+
+function collectClaudeRows(result: Record<string, unknown>) {
+  if (Array.isArray(result.rows)) {
+    return result.rows;
+  }
+
+  if (!Array.isArray(result.pages)) {
+    return [];
+  }
+
+  return result.pages.flatMap((page, pageIndex) => {
+    const pageRecord = page as Record<string, unknown>;
+    const pageNumber =
+      toNumberOrNull(pageRecord.page_number) ||
+      toNumberOrNull(pageRecord.page) ||
+      pageIndex + 1;
+    const pageRows = Array.isArray(pageRecord.rows) ? pageRecord.rows : [];
+
+    return pageRows.map((row) => {
+      if (!row || typeof row !== "object") {
+        return row;
+      }
+
+      return {
+        page_number: pageNumber,
+        ...(row as Record<string, unknown>),
+      };
+    });
   });
 }
 

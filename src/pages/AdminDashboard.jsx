@@ -1759,9 +1759,7 @@ export default function AdminDashboard() {
     return data || [];
   }
 
-  function handleAdminPaperSheetFileChange(event) {
-    const file = event.target.files?.[0] || null;
-
+  function handleSelectedAdminPaperSheetFile(file) {
     setPaperUploadError("");
     setPaperUploadSuccess("");
 
@@ -1783,6 +1781,15 @@ export default function AdminDashboard() {
     }
 
     setAdminUploadFile(file);
+  }
+
+  function handleAdminPaperSheetFileChange(event) {
+    handleSelectedAdminPaperSheetFile(event.target.files?.[0] || null);
+  }
+
+  function handleAdminPaperSheetFileDrop(event) {
+    event.preventDefault();
+    handleSelectedAdminPaperSheetFile(event.dataTransfer.files?.[0] || null);
   }
 
   async function handleUploadPaperSheetAsAdmin(event) {
@@ -2228,6 +2235,7 @@ export default function AdminDashboard() {
                 setUploadNotes={setAdminUploadNotes}
                 uploadFile={adminUploadFile}
                 onFileChange={handleAdminPaperSheetFileChange}
+                onFileDrop={handleAdminPaperSheetFileDrop}
                 onUploadPaperSheet={handleUploadPaperSheetAsAdmin}
                 uploadingPaperSheet={uploadingPaperSheetAsAdmin}
                 adminNotes={uploadAdminNotes}
@@ -4251,6 +4259,7 @@ function PaperSheetsReviewView({
   setUploadNotes,
   uploadFile,
   onFileChange,
+  onFileDrop,
   onUploadPaperSheet,
   uploadingPaperSheet,
   adminNotes,
@@ -4382,13 +4391,22 @@ function PaperSheetsReviewView({
             </FormField>
 
             <FormField label="File">
-              <input
-                id="admin-paper-sheet-file-input"
-                type="file"
-                accept="image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf"
-                onChange={onFileChange}
-                className="block h-12 w-full cursor-pointer rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 file:mr-4 file:rounded-xl file:border-0 file:bg-[#2f8fc8] file:px-4 file:py-2 file:font-bold file:text-white"
-              />
+              <div
+                onDrop={onFileDrop}
+                onDragOver={(event) => event.preventDefault()}
+                className="rounded-2xl border-2 border-dashed border-blue-200 bg-white p-3 transition hover:border-blue-300 hover:bg-blue-50/50"
+              >
+                <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">
+                  Choose Or Drop File
+                </p>
+                <input
+                  id="admin-paper-sheet-file-input"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf"
+                  onChange={onFileChange}
+                  className="block h-12 w-full cursor-pointer rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 file:mr-4 file:rounded-xl file:border-0 file:bg-[#2f8fc8] file:px-4 file:py-2 file:font-bold file:text-white"
+                />
+              </div>
             </FormField>
           </div>
 
@@ -7173,6 +7191,22 @@ function isNotNullViolation(error) {
 
 function getFriendlySupabaseError(error, fallbackMessage) {
   if (isRowLevelSecurityError(error)) {
+    const hintText = [fallbackMessage, error?.message]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    if (
+      hintText.includes("paper sheet") ||
+      hintText.includes("paper_sheet") ||
+      hintText.includes("paper-sheets")
+    ) {
+      return (
+        "Supabase blocked this paper-sheet action with Row Level Security. Run the paper-sheet upload RLS policy SQL for paper_sheet_uploads, paper_sheet_draft_entries, and the paper-sheets storage bucket, then try again. Original error: " +
+        (error?.message || "RLS blocked the request.")
+      );
+    }
+
     return (
       "Supabase blocked this action with Row Level Security. Run the admin RLS policy SQL for mileage_sheets and mileage_entries, then try again. Original error: " +
       (error?.message || "RLS blocked the request.")
