@@ -1,6 +1,6 @@
 import JobberVisitPicker from "../components/JobberVisitPicker";
 import JohnnyChatShell from "../components/JohnnyChatShell";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   BadgeCheck,
@@ -191,8 +191,10 @@ export default function AdminDashboard() {
   const [editSuccess, setEditSuccess] = useState("");
 
   const [addForm, setAddForm] = useState(blankAddForm);
+  const [adminEntryBatchRows, setAdminEntryBatchRows] = useState([]);
   const [selectedJobberVisit, setSelectedJobberVisit] = useState(null);
   const [savingAdd, setSavingAdd] = useState(false);
+  const [savingAddBatch, setSavingAddBatch] = useState(false);
   const [addError, setAddError] = useState("");
   const [addSuccess, setAddSuccess] = useState("");
   const [editJobberVisit, setEditJobberVisit] = useState(null);
@@ -233,6 +235,7 @@ export default function AdminDashboard() {
     useState("");
   const [adminDraftError, setAdminDraftError] = useState("");
   const [adminDraftSuccess, setAdminDraftSuccess] = useState("");
+  const adminDraftHasUnsavedEditsRef = useRef(false);
 
   const adminDraftVehicleOptions = useMemo(() => {
     const selectedUpload = (paperUploads || []).find((upload) => {
@@ -709,6 +712,11 @@ export default function AdminDashboard() {
       }, 250);
     }
 
+    function schedulePaperDraftRealtimeRefresh() {
+      if (adminDraftHasUnsavedEditsRef.current) return;
+      scheduleRealtimeRefresh();
+    }
+
     const channel = supabase
       .channel("admin-dashboard-live-sync")
       .on(
@@ -768,7 +776,7 @@ export default function AdminDashboard() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "paper_sheet_draft_entries" },
-        scheduleRealtimeRefresh
+        schedulePaperDraftRealtimeRefresh
       )
       .on(
         "postgres_changes",
@@ -996,7 +1004,11 @@ export default function AdminDashboard() {
     setAssignments(assignmentsResult.data || []);
     setMessages(messagesResult.data || []);
     setPaperUploads(paperUploadsResult.data || []);
-    setPaperDraftEntries(paperDraftEntriesResult.data || []);
+    setPaperDraftEntries((currentRows) =>
+      adminDraftHasUnsavedEditsRef.current
+        ? currentRows
+        : paperDraftEntriesResult.data || []
+    );
     setJobberTimesheets(jobberTimesheetsResult.data || []);
     setDataError("");
 
@@ -1242,6 +1254,210 @@ export default function AdminDashboard() {
 
     setEditError("");
     setEditSuccess("");
+  }
+
+  function buildAdminEntryBatchRowFromForm() {
+    const selectedWorkerForAdd = workers.find(
+      (worker) => String(worker.id) === String(addForm.workerId)
+    );
+
+    if (!selectedWorkerForAdd) {
+      throw new Error("Please select a worker.");
+    }
+
+    const effectiveVehicleName = getAdminFormVehicleName(addForm);
+
+    if (!effectiveVehicleName) {
+      throw new Error("Please select a vehicle or enter the other company vehicle name.");
+    }
+
+    const selectedProperty = properties.find(
+      (property) => property.property_code === addForm.propertyCode
+    );
+
+    if (!selectedJobberVisit && !selectedProperty) {
+      throw new Error("Please select a Jobber Visit or Property before adding the row.");
+    }
+
+    if (
+      requiresOdometerOverride({
+        isSharedVehicle: addForm.usesSharedVehicleOdometer,
+        startOdometer: addForm.startOdometer,
+        expectedStartOdometer: addForm.expectedStartOdometer,
+      }) &&
+      !addForm.odometerOverrideReason.trim()
+    ) {
+      throw new Error(
+        "Start odometer does not match the shared vehicle odometer. Please enter an override reason."
+      );
+    }
+
+    const propertyCode = selectedJobberVisit
+      ? resolvePropertyCode({
+          address: selectedJobberVisit.jobberPropertyAddress,
+          properties,
+          fallbackCode:
+            selectedJobberVisit.jobberPropertyId || selectedJobberVisit.jobberVisitId,
+        })
+      : selectedProperty?.property_code;
+
+    const propertyDisplay = selectedJobberVisit
+      ? selectedJobberVisit.jobberPropertyAddress ||
+        selectedJobberVisit.jobberJobTitle ||
+        "Jobber Visit"
+      : selectedProperty?.display_label ||
+        selectedProperty?.display_name ||
+        selectedProperty?.property_code;
+
+    const matchedVehicle = findVehicleByDisplayName(vehicles, effectiveVehicleName);
+
+    return {
+      id: "admin-batch-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+      workerId: selectedWorkerForAdd.id,
+      workerName: selectedWorkerForAdd.full_name || selectedWorkerForAdd.email || "Worker",
+      entryDate: addForm.entryDate,
+      vehicleId: matchedVehicle?.id || "",
+      vehicleName: effectiveVehicleName,
+      propertyCode,
+      propertyDisplay,
+      startOdometer: addForm.startOdometer,
+      endOdometer: addForm.endOdometer,
+      expectedStartOdometer: addForm.expectedStartOdometer,
+      usesSharedVehicleOdometer: addForm.usesSharedVehicleOdometer,
+      odometerOverrideReason: addForm.odometerOverrideReason,
+      purpose: addForm.purpose,
+      status: addForm.status,
+      jobberVisit: selectedJobberVisit,
+    };
+  }
+
+  function handleAddAdminEntryBatchRow() {
+    try {
+      const nextRow = buildAdminEntryBatchRowFromForm();
+
+      setAdminEntryBatchRows((currentRows) => [...currentRows, nextRow]);
+      setAddForm((currentForm) => ({
+        ...blankAddForm,
+        workerId: currentForm.workerId,
+        entryDate: currentForm.entryDate,
+        vehicleName: currentForm.vehicleName,
+        customVehicleName: currentForm.customVehicleName,
+        startOdometer: currentForm.endOdometer,
+        expectedStartOdometer: currentForm.endOdometer,
+        usesSharedVehicleOdometer: currentForm.usesSharedVehicleOdometer,
+        odometerOverrideReason: "",
+        endOdometer: "",
+        propertyCode: "",
+        purpose: currentForm.purpose,
+        status: currentForm.status,
+      }));
+      setSelectedJobberVisit(null);
+      setAddError("");
+      setAddSuccess("Row added to the batch. Add another row or submit the batch.");
+    } catch (error) {
+      setAddError(getFriendlySupabaseError(error, "Unable to add row."));
+      setAddSuccess("");
+    }
+  }
+
+  function updateAdminEntryBatchRow(rowId, field, value) {
+    setAdminEntryBatchRows((currentRows) =>
+      currentRows.map((row) => {
+        if (String(row.id) !== String(rowId)) return row;
+
+        const nextRow = {
+          ...row,
+          [field]: field === "propertyCode" ? String(value || "").toUpperCase() : value,
+        };
+
+        if (field === "propertyCode") {
+          nextRow.jobberVisit = null;
+          const selectedProperty = findPropertyByCode(properties, nextRow.propertyCode);
+          if (selectedProperty) {
+            nextRow.propertyCode = selectedProperty.property_code;
+            nextRow.propertyDisplay =
+              selectedProperty.display_label ||
+              selectedProperty.display_name ||
+              selectedProperty.property_code;
+            nextRow.jobberVisit = null;
+          }
+        }
+
+        return nextRow;
+      })
+    );
+  }
+
+  function deleteAdminEntryBatchRow(rowId) {
+    setAdminEntryBatchRows((currentRows) =>
+      currentRows.filter((row) => String(row.id) !== String(rowId))
+    );
+  }
+
+  async function handleSubmitAdminEntryBatchRows() {
+    if (adminEntryBatchRows.length === 0) {
+      setAddError("Add at least one row before submitting the batch.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Submit ${adminEntryBatchRows.length} mileage entries now?`
+    );
+
+    if (!confirmed) return;
+
+    setSavingAddBatch(true);
+    setAddError("");
+    setAddSuccess("");
+
+    try {
+      for (const row of adminEntryBatchRows) {
+        const worker = workers.find((item) => String(item.id) === String(row.workerId));
+        const selectedProperty = findPropertyByCode(properties, row.propertyCode);
+
+        if (!worker) {
+          throw new Error("One batch row is missing its worker.");
+        }
+
+        if (!row.jobberVisit && !selectedProperty) {
+          throw new Error(
+            `Entry for ${row.workerName || "worker"} needs a valid property code before submitting.`
+          );
+        }
+
+        await saveWorkerMileageEntry({
+          profile: worker,
+          entryDate: row.entryDate,
+          vehicleId: row.vehicleId,
+          vehicleName: row.vehicleName,
+          propertyCode: row.propertyCode,
+          propertyDisplay:
+            row.propertyDisplay ||
+            selectedProperty?.display_label ||
+            selectedProperty?.display_name ||
+            selectedProperty?.property_code,
+          startOdometer: row.startOdometer,
+          endOdometer: row.endOdometer,
+          expectedStartOdometer: row.expectedStartOdometer || row.startOdometer,
+          odometerOverrideReason: row.odometerOverrideReason || "",
+          purpose: row.purpose,
+          status: row.status || "saved",
+          jobberVisit: row.jobberVisit,
+        });
+      }
+
+      await refreshAllRealtimeData();
+      setSelectedMonth(getMonthKeyFromDate(adminEntryBatchRows[0].entryDate));
+      setSelectedWorkerId(adminEntryBatchRows[0].workerId);
+      setSelectedStatus("all");
+      setAdminEntryBatchRows([]);
+      setAddSuccess("Batch mileage entries saved successfully.");
+    } catch (error) {
+      console.error(error);
+      setAddError(getFriendlySupabaseError(error, "Unable to submit batch entries."));
+    } finally {
+      setSavingAddBatch(false);
+    }
   }
 
   async function handleAddEntry(event) {
@@ -1928,6 +2144,7 @@ export default function AdminDashboard() {
   }
 
   function handleAdminDraftRowChange(rowId, field, value) {
+    adminDraftHasUnsavedEditsRef.current = true;
     setPaperDraftEntries((currentRows) => {
       const targetRow = currentRows.find(
         (row) => String(row.id) === String(rowId)
@@ -1986,6 +2203,7 @@ export default function AdminDashboard() {
 
   function handleAddAdminDraftRow(upload) {
     if (!upload?.id) return;
+    adminDraftHasUnsavedEditsRef.current = true;
 
     const uploadRows = getRenumberedAdminDraftRows(
       paperDraftEntries.filter((row) => {
@@ -2053,7 +2271,6 @@ export default function AdminDashboard() {
         )
       );
       await renumberAdminDraftRowsInDatabase(row.upload_id);
-      await refreshPaperDraftEntries();
       setAdminDraftSuccess("Draft row deleted.");
     } catch (error) {
       console.error(error);
@@ -2114,6 +2331,7 @@ export default function AdminDashboard() {
         if (insertError) throw insertError;
       }
 
+      adminDraftHasUnsavedEditsRef.current = false;
       await refreshPaperDraftEntries();
       setAdminDraftSuccess("Draft rows saved for the worker.");
     } catch (error) {
@@ -2307,6 +2525,7 @@ export default function AdminDashboard() {
         },
       });
 
+      adminDraftHasUnsavedEditsRef.current = false;
       await Promise.all([refreshPaperUploads(), refreshPaperDraftEntries()]);
 
       setSelectedPaperUploadId(upload.id);
@@ -2574,6 +2793,12 @@ export default function AdminDashboard() {
                 addError={addError}
                 addSuccess={addSuccess}
                 addCalculatedMiles={addCalculatedMiles}
+                entryBatchRows={adminEntryBatchRows}
+                savingEntryBatch={savingAddBatch}
+                onAddBatchRow={handleAddAdminEntryBatchRow}
+                onUpdateBatchRow={updateAdminEntryBatchRow}
+                onDeleteBatchRow={deleteAdminEntryBatchRow}
+                onSubmitBatchRows={handleSubmitAdminEntryBatchRows}
                 workers={workers}
                 properties={properties}
                 jobberVisits={jobberVisits}
@@ -3461,6 +3686,12 @@ function AdminAddEntryView({
   addError,
   addSuccess,
   addCalculatedMiles,
+  entryBatchRows,
+  savingEntryBatch,
+  onAddBatchRow,
+  onUpdateBatchRow,
+  onDeleteBatchRow,
+  onSubmitBatchRows,
   workers,
   properties,
   jobberVisits,
@@ -3643,7 +3874,30 @@ function AdminAddEntryView({
         {addError && <AlertBox type="error" message={addError} />}
         {addSuccess && <AlertBox type="success" message={addSuccess} />}
 
-        <div className="flex justify-end border-t border-slate-100 pt-6">
+        <div className="flex flex-col gap-3 border-t border-slate-100 pt-6 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onAddBatchRow}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-blue-200 bg-blue-50 px-8 py-3 font-black text-blue-700 transition hover:bg-blue-100 md:w-auto"
+          >
+            <Plus size={19} />
+            Add Row
+          </button>
+
+          {entryBatchRows.length > 0 && (
+            <button
+              type="button"
+              disabled={savingEntryBatch}
+              onClick={onSubmitBatchRows}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-8 py-3 font-black text-white shadow-lg shadow-emerald-100 transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70 md:w-auto"
+            >
+              <Save size={19} />
+              {savingEntryBatch
+                ? "Submitting Rows..."
+                : `Submit ${entryBatchRows.length} Rows`}
+            </button>
+          )}
+
           <button
             type="submit"
             disabled={savingAdd}
@@ -3654,7 +3908,173 @@ function AdminAddEntryView({
           </button>
         </div>
       </form>
+
+      <AdminEntryBatchRowsTable
+        rows={entryBatchRows}
+        properties={properties}
+        vehicleOptions={vehicleOptions}
+        onUpdateRow={onUpdateBatchRow}
+        onDeleteRow={onDeleteBatchRow}
+      />
     </section>
+  );
+}
+
+function AdminEntryBatchRowsTable({
+  rows,
+  properties,
+  vehicleOptions,
+  onUpdateRow,
+  onDeleteRow,
+}) {
+  if (!rows.length) return null;
+
+  return (
+    <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200">
+      <div className="border-b border-slate-100 bg-slate-50 px-5 py-4">
+        <h3 className="font-black text-slate-950">Rows Ready To Submit</h3>
+        <p className="mt-1 text-sm text-slate-500">
+          Edit any admin-added row before submitting the batch.
+        </p>
+      </div>
+
+      <div className="overflow-auto">
+        <table className="w-full min-w-[1320px] border-collapse text-left text-sm">
+          <thead className="bg-slate-50 text-slate-600">
+            <tr>
+              <TableHeader>#</TableHeader>
+              <TableHeader>Worker</TableHeader>
+              <TableHeader>Date</TableHeader>
+              <TableHeader>Vehicle</TableHeader>
+              <TableHeader>Property Code</TableHeader>
+              <TableHeader>Start Odo</TableHeader>
+              <TableHeader>Ending Odo</TableHeader>
+              <TableHeader>Miles</TableHeader>
+              <TableHeader>Purpose</TableHeader>
+              <TableHeader>Status</TableHeader>
+              <TableHeader>Action</TableHeader>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {rows.map((row, index) => (
+              <tr key={row.id}>
+                <td className="px-4 py-4 font-black text-slate-950">
+                  {index + 1}
+                </td>
+                <td className="px-4 py-4 font-black text-slate-700">
+                  {row.workerName}
+                </td>
+                <td className="px-4 py-4">
+                  <input
+                    type="date"
+                    value={row.entryDate || ""}
+                    onChange={(event) =>
+                      onUpdateRow(row.id, "entryDate", event.target.value)
+                    }
+                    className="w-40 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  />
+                </td>
+                <td className="px-4 py-4">
+                  <select
+                    value={row.vehicleName || ""}
+                    onChange={(event) =>
+                      onUpdateRow(row.id, "vehicleName", event.target.value)
+                    }
+                    className="w-56 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  >
+                    <option value="">Select vehicle</option>
+                    {row.vehicleName && !vehicleOptions.includes(row.vehicleName) && (
+                      <option value={row.vehicleName}>{row.vehicleName}</option>
+                    )}
+                    {vehicleOptions.map((vehicleName) => (
+                      <option key={vehicleName} value={vehicleName}>
+                        {vehicleName}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td className="px-4 py-4">
+                  <PropertyCodeInput
+                    value={row.propertyCode || ""}
+                    properties={properties}
+                    onChange={(value) =>
+                      onUpdateRow(row.id, "propertyCode", value)
+                    }
+                    className="w-44"
+                  />
+                  {row.jobberVisit && (
+                    <p className="mt-1 text-xs font-black text-blue-600">
+                      Jobber
+                    </p>
+                  )}
+                </td>
+                <td className="px-4 py-4">
+                  <input
+                    type="number"
+                    value={row.startOdometer ?? ""}
+                    onChange={(event) =>
+                      onUpdateRow(row.id, "startOdometer", event.target.value)
+                    }
+                    className="w-32 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  />
+                </td>
+                <td className="px-4 py-4">
+                  <input
+                    type="number"
+                    value={row.endOdometer ?? ""}
+                    onChange={(event) =>
+                      onUpdateRow(row.id, "endOdometer", event.target.value)
+                    }
+                    className="w-32 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  />
+                </td>
+                <td className="px-4 py-4 font-black text-slate-950">
+                  {formatMiles(
+                    calculateMilesFromOdometer(row.startOdometer, row.endOdometer)
+                  )}
+                </td>
+                <td className="px-4 py-4">
+                  <textarea
+                    rows="2"
+                    value={row.purpose || ""}
+                    onChange={(event) =>
+                      onUpdateRow(row.id, "purpose", event.target.value)
+                    }
+                    className="w-64 resize-none rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  />
+                </td>
+                <td className="px-4 py-4">
+                  <select
+                    value={row.status || "saved"}
+                    onChange={(event) =>
+                      onUpdateRow(row.id, "status", event.target.value)
+                    }
+                    className="w-40 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  >
+                    {statusOptions
+                      .filter((status) => status.value !== "all")
+                      .map((status) => (
+                        <option key={status.value} value={status.value}>
+                          {status.label}
+                        </option>
+                      ))}
+                  </select>
+                </td>
+                <td className="px-4 py-4">
+                  <button
+                    type="button"
+                    onClick={() => onDeleteRow(row.id)}
+                    className="rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100"
+                  >
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -5274,19 +5694,18 @@ function PaperSheetsReviewView({
                         </select>
                       </td>
                       <td className="px-4 py-4">
-                        <input
-                          type="text"
-                          list="admin-draft-property-codes"
+                        <PropertyCodeInput
                           value={row.property_code || ""}
+                          properties={properties}
                           onChange={(event) =>
                             onDraftRowChange(
                               row.id,
                               "property_code",
-                              event.target.value
+                              event
                             )
                           }
                           placeholder="Code"
-                          className="w-[110px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-950 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                          className="w-[120px]"
                         />
                       </td>
                       <td className="max-w-[280px] px-4 py-4 text-slate-700">
@@ -5438,17 +5857,6 @@ function PaperSheetsReviewView({
               </tbody>
             </table>
           </div>
-
-          <datalist id="admin-draft-property-codes">
-            {(properties || []).map((property) => (
-              <option
-                key={property.id || property.property_code}
-                value={property.property_code}
-              >
-                {getPropertyAddressLabel(property) || property.property_code}
-              </option>
-            ))}
-          </datalist>
 
           {selectedDraftRows.length > 0 && (
             <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
@@ -6018,6 +6426,96 @@ function JobberMileageCell({ entry, timesheet, properties = [] }) {
   );
 }
 
+function PropertyCodeInput({
+  value,
+  onChange,
+  properties,
+  disabled = false,
+  placeholder = "Code",
+  className = "",
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const cleanQuery = String(value || "").trim().toLowerCase();
+
+  const suggestions = useMemo(() => {
+    if (!cleanQuery) return [];
+
+    return (properties || [])
+      .filter((property) => {
+        const searchText = [
+          property.property_code,
+          property.house_number,
+          property.street_name,
+          property.street_type,
+          property.city,
+          getPropertyDisplayLabel(property),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return searchText.includes(cleanQuery);
+      })
+      .slice(0, 6);
+  }, [properties, cleanQuery]);
+
+  function handleChange(event) {
+    const nextValue = String(event.target.value || "").toUpperCase();
+    onChange(nextValue);
+    setIsOpen(Boolean(nextValue.trim()));
+  }
+
+  function selectProperty(property) {
+    onChange(property.property_code || "");
+    setIsOpen(false);
+  }
+
+  return (
+    <div className={`relative ${className}`}>
+      <input
+        type="text"
+        value={value}
+        disabled={disabled}
+        onChange={handleChange}
+        onFocus={() => {
+          if (cleanQuery) setIsOpen(true);
+        }}
+        onBlur={() => window.setTimeout(() => setIsOpen(false), 120)}
+        placeholder={placeholder}
+        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-black uppercase text-slate-950 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+      />
+
+      {isOpen && cleanQuery && (
+        <div className="absolute left-0 top-full z-50 mt-2 max-h-64 w-[320px] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl">
+          {suggestions.length > 0 ? (
+            suggestions.map((property) => (
+              <button
+                key={property.id || property.property_code}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => selectProperty(property)}
+                className="w-full rounded-xl px-3 py-2 text-left transition hover:bg-blue-50"
+              >
+                <p className="text-sm font-black text-slate-950">
+                  {property.property_code}
+                </p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                  {getPropertyAddressLabel(property) ||
+                    getPropertyDisplayLabel(property)}
+                </p>
+              </button>
+            ))
+          ) : (
+            <p className="px-3 py-4 text-center text-xs font-semibold text-slate-500">
+              No matching property code.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
@@ -6044,7 +6542,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
     const cleanQuery = query.trim().toLowerCase();
 
     if (!cleanQuery) {
-      return properties.slice(0, 8);
+      return [];
     }
 
     return properties
@@ -6073,7 +6571,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
     const value = event.target.value;
 
     setQuery(value);
-    setIsOpen(true);
+    setIsOpen(Boolean(value.trim()));
 
     if (selectedProperty && value !== getPropertyDisplayLabel(selectedProperty)) {
       onSelect("");
@@ -6106,7 +6604,9 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
             required
             value={query}
             onChange={handleInputChange}
-            onFocus={() => setIsOpen(true)}
+            onFocus={() => {
+              if (!selectedPropertyCode && query.trim()) setIsOpen(true);
+            }}
             placeholder="Search by property code, street, house number, or city..."
             className="w-full border-0 bg-transparent px-3 text-slate-900 outline-none placeholder:text-slate-400"
           />
@@ -6119,7 +6619,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
         </div>
       )}
 
-      {isOpen && (
+      {isOpen && query.trim() && (
         <div className="absolute left-0 right-0 top-full z-40 mt-2 max-h-80 overflow-y-auto rounded-3xl border border-slate-200 bg-white p-2 shadow-2xl">
           {filteredProperties.length > 0 ? (
             filteredProperties.map((property) => (
@@ -6158,7 +6658,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
         </div>
       )}
 
-      {isOpen && (
+      {isOpen && query.trim() && (
         <button
           type="button"
           aria-label="Close property suggestions"

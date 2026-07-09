@@ -1,6 +1,6 @@
 import JobberVisitPicker from "../components/JobberVisitPicker";
 import JohnnyChatShell from "../components/JohnnyChatShell";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   BadgeCheck,
@@ -164,7 +164,9 @@ export default function WorkerDashboard() {
   const [dataError, setDataError] = useState("");
 
   const [form, setForm] = useState(blankForm);
+  const [entryBatchRows, setEntryBatchRows] = useState([]);
   const [savingEntry, setSavingEntry] = useState(false);
+  const [savingEntryBatch, setSavingEntryBatch] = useState(false);
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
   const [timesheetMileageForm, setTimesheetMileageForm] = useState(
@@ -200,6 +202,7 @@ export default function WorkerDashboard() {
   const [submittingDraftUploadId, setSubmittingDraftUploadId] = useState("");
   const [draftError, setDraftError] = useState("");
   const [draftSuccess, setDraftSuccess] = useState("");
+  const paperDraftHasUnsavedEditsRef = useRef(false);
 
   const calculatedMiles = useMemo(() => {
     return calculateMilesFromOdometer(form.startOdometer, form.endOdometer);
@@ -329,6 +332,11 @@ export default function WorkerDashboard() {
       }, 250);
     }
 
+    function schedulePaperDraftRealtimeRefresh() {
+      if (paperDraftHasUnsavedEditsRef.current) return;
+      scheduleRealtimeRefresh();
+    }
+
     const channel = supabase
       .channel(`worker-dashboard-live-sync-${profile.id}`)
       .on(
@@ -383,7 +391,7 @@ export default function WorkerDashboard() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "paper_sheet_draft_entries" },
-        scheduleRealtimeRefresh
+        schedulePaperDraftRealtimeRefresh
       )
       .on(
         "postgres_changes",
@@ -527,7 +535,9 @@ export default function WorkerDashboard() {
     setProperties(propertyList);
     setMessages(workerMessages);
     setPaperUploads(workerPaperUploads);
-    setPaperDraftEntries(workerDraftEntries);
+    setPaperDraftEntries((currentRows) =>
+      paperDraftHasUnsavedEditsRef.current ? currentRows : workerDraftEntries
+    );
     setJobberTimesheets(workerTimesheets);
 
     return {
@@ -629,6 +639,200 @@ export default function WorkerDashboard() {
 
     setEditError("");
     setEditSuccess("");
+  }
+
+  function buildWorkerEntryBatchRowFromForm() {
+    if (!profile) {
+      throw new Error("Worker profile is missing.");
+    }
+
+    const selectedVehicle = vehicles.find(
+      (vehicle) => vehicle.id === form.vehicleId
+    );
+    const vehicleName = getWorkerFormVehicleName(form, vehicles, profile);
+
+    if (!vehicleName) {
+      throw new Error("Please select a vehicle or enter the other company vehicle name.");
+    }
+
+    const selectedProperty = properties.find(
+      (property) => property.property_code === form.propertyCode
+    );
+
+    if (!selectedJobberVisit && !selectedProperty) {
+      throw new Error("Please select a Jobber Visit or Property before adding the row.");
+    }
+
+    if (
+      requiresOdometerOverride({
+        isSharedVehicle: form.usesSharedVehicleOdometer,
+        startOdometer: form.startOdometer,
+        expectedStartOdometer: form.expectedStartOdometer,
+      }) &&
+      !form.odometerOverrideReason.trim()
+    ) {
+      throw new Error(
+        "Start odometer does not match the shared vehicle odometer. Please enter an override reason."
+      );
+    }
+
+    const propertyCode = selectedJobberVisit
+      ? resolvePropertyCode({
+          address: selectedJobberVisit.jobberPropertyAddress,
+          properties,
+          fallbackCode:
+            selectedJobberVisit.jobberPropertyId || selectedJobberVisit.jobberVisitId,
+        })
+      : selectedProperty?.property_code;
+
+    const propertyDisplay = selectedJobberVisit
+      ? selectedJobberVisit.jobberPropertyAddress ||
+        selectedJobberVisit.jobberJobTitle ||
+        "Jobber Visit"
+      : selectedProperty?.display_label ||
+        selectedProperty?.display_name ||
+        selectedProperty?.property_code;
+
+    return {
+      id: "batch-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+      entryDate: form.entryDate,
+      vehicleId: selectedVehicle?.id || "",
+      vehicleName,
+      propertyCode,
+      propertyDisplay,
+      startOdometer: form.startOdometer,
+      endOdometer: form.endOdometer,
+      expectedStartOdometer: form.expectedStartOdometer,
+      usesSharedVehicleOdometer: form.usesSharedVehicleOdometer,
+      odometerOverrideReason: form.odometerOverrideReason,
+      purpose: form.purpose,
+      jobberVisit: selectedJobberVisit,
+    };
+  }
+
+  function handleAddEntryBatchRow() {
+    try {
+      const nextRow = buildWorkerEntryBatchRowFromForm();
+
+      setEntryBatchRows((currentRows) => [...currentRows, nextRow]);
+      setForm((currentForm) => ({
+        ...blankForm,
+        entryDate: currentForm.entryDate,
+        vehicleId: currentForm.vehicleId,
+        customVehicleName: currentForm.customVehicleName,
+        startOdometer: currentForm.endOdometer,
+        expectedStartOdometer: currentForm.endOdometer,
+        usesSharedVehicleOdometer: currentForm.usesSharedVehicleOdometer,
+        odometerOverrideReason: "",
+        endOdometer: "",
+        purpose: currentForm.purpose,
+      }));
+      setSelectedJobberVisit(null);
+      setFormError("");
+      setFormSuccess("Row added to the batch. Add another row or submit the batch.");
+    } catch (error) {
+      setFormError(error?.message || "Unable to add row.");
+      setFormSuccess("");
+    }
+  }
+
+  function updateEntryBatchRow(rowId, field, value) {
+    setEntryBatchRows((currentRows) =>
+      currentRows.map((row) => {
+        if (String(row.id) !== String(rowId)) return row;
+
+        const nextRow = {
+          ...row,
+          [field]: field === "propertyCode" ? String(value || "").toUpperCase() : value,
+        };
+
+        if (field === "propertyCode") {
+          nextRow.jobberVisit = null;
+          const selectedProperty = findPropertyByCode(properties, nextRow.propertyCode);
+          if (selectedProperty) {
+            nextRow.propertyCode = selectedProperty.property_code;
+            nextRow.propertyDisplay =
+              selectedProperty.display_label ||
+              selectedProperty.display_name ||
+              selectedProperty.property_code;
+            nextRow.jobberVisit = null;
+          }
+        }
+
+        return nextRow;
+      })
+    );
+  }
+
+  function deleteEntryBatchRow(rowId) {
+    setEntryBatchRows((currentRows) =>
+      currentRows.filter((row) => String(row.id) !== String(rowId))
+    );
+  }
+
+  async function handleSubmitEntryBatchRows() {
+    if (!profile) {
+      setFormError("Worker profile is missing.");
+      return;
+    }
+
+    if (entryBatchRows.length === 0) {
+      setFormError("Add at least one row before submitting the batch.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Submit ${entryBatchRows.length} mileage entries now?`
+    );
+
+    if (!confirmed) return;
+
+    setSavingEntryBatch(true);
+    setFormError("");
+    setFormSuccess("");
+
+    try {
+      for (const row of entryBatchRows) {
+        const selectedProperty = findPropertyByCode(properties, row.propertyCode);
+
+        if (!row.jobberVisit && !selectedProperty) {
+          throw new Error(
+            `Entry ${row.entryDate || ""} needs a valid property code before submitting.`
+          );
+        }
+
+        await saveWorkerMileageEntry({
+          profile,
+          entryDate: row.entryDate,
+          vehicleId: row.vehicleId,
+          vehicleName: row.vehicleName,
+          propertyCode: row.propertyCode,
+          propertyDisplay:
+            row.propertyDisplay ||
+            selectedProperty?.display_label ||
+            selectedProperty?.display_name ||
+            selectedProperty?.property_code,
+          startOdometer: row.startOdometer,
+          endOdometer: row.endOdometer,
+          expectedStartOdometer: row.expectedStartOdometer || row.startOdometer,
+          odometerOverrideReason: row.odometerOverrideReason || "",
+          purpose: row.purpose,
+          jobberVisit: row.jobberVisit,
+        });
+      }
+
+      await refreshEntries(profile.id);
+      const freshOdometerStates = await getVehicleOdometerStates();
+      setVehicleOdometerStates(freshOdometerStates);
+      setSelectedMonth(getMonthKeyFromDate(entryBatchRows[0].entryDate));
+      setEntryBatchRows([]);
+      setFormSuccess("Batch mileage entries saved successfully.");
+    } catch (error) {
+      console.error(error);
+      setFormError(error?.message || "Unable to submit batch entries.");
+    } finally {
+      setSavingEntryBatch(false);
+    }
   }
 
   async function handleSaveEntry(event) {
@@ -1374,6 +1578,7 @@ export default function WorkerDashboard() {
         },
       });
 
+      paperDraftHasUnsavedEditsRef.current = false;
       await Promise.all([
         refreshPaperUploads(profile.id),
         refreshPaperDraftEntries(profile.id),
@@ -1394,6 +1599,7 @@ export default function WorkerDashboard() {
   }
 
   function updatePaperDraftEntry(draftId, field, value) {
+    paperDraftHasUnsavedEditsRef.current = true;
     setPaperDraftEntries((currentRows) =>
       currentRows.map((row) => {
         const targetRow = currentRows.find((item) => {
@@ -1459,6 +1665,7 @@ export default function WorkerDashboard() {
 
   function handleAddPaperDraftRow(upload) {
     if (!profile?.id || !upload?.id) return;
+    paperDraftHasUnsavedEditsRef.current = true;
 
     const uploadRows = getRenumberedPaperDraftRows(
       paperDraftEntries.filter((row) => {
@@ -1524,7 +1731,6 @@ export default function WorkerDashboard() {
         )
       );
       await renumberPaperDraftRowsInDatabase(row.upload_id, profile.id);
-      await refreshPaperDraftEntries(profile.id);
     } catch (error) {
       console.error(error);
       setDraftError(error?.message || "Unable to delete draft row.");
@@ -1586,6 +1792,7 @@ export default function WorkerDashboard() {
         if (insertError) throw insertError;
       }
 
+      paperDraftHasUnsavedEditsRef.current = false;
       await refreshPaperDraftEntries(profile.id);
       setDraftSuccess("Draft rows saved successfully.");
     } catch (error) {
@@ -1879,6 +2086,12 @@ export default function WorkerDashboard() {
                 formError={formError}
                 formSuccess={formSuccess}
                 onSave={handleSaveEntry}
+                entryBatchRows={entryBatchRows}
+                savingEntryBatch={savingEntryBatch}
+                onAddBatchRow={handleAddEntryBatchRow}
+                onUpdateBatchRow={updateEntryBatchRow}
+                onDeleteBatchRow={deleteEntryBatchRow}
+                onSubmitBatchRows={handleSubmitEntryBatchRows}
                 profile={profile}
               />
             )}
@@ -2870,6 +3083,12 @@ function NewEntryView({
   formError,
   formSuccess,
   onSave,
+  entryBatchRows,
+  savingEntryBatch,
+  onAddBatchRow,
+  onUpdateBatchRow,
+  onDeleteBatchRow,
+  onSubmitBatchRows,
   profile,
 }) {
   return (
@@ -3017,7 +3236,30 @@ function NewEntryView({
         {formError && <AlertBox type="error" message={formError} />}
         {formSuccess && <AlertBox type="success" message={formSuccess} />}
 
-        <div className="flex justify-end border-t border-slate-100 pt-6">
+        <div className="flex flex-col gap-3 border-t border-slate-100 pt-6 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onAddBatchRow}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-blue-200 bg-blue-50 px-8 py-3 font-black text-blue-700 transition hover:bg-blue-100 md:w-auto"
+          >
+            <Plus size={19} />
+            Add Row
+          </button>
+
+          {entryBatchRows.length > 0 && (
+            <button
+              type="button"
+              disabled={savingEntryBatch}
+              onClick={onSubmitBatchRows}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-8 py-3 font-black text-white shadow-lg shadow-emerald-100 transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70 md:w-auto"
+            >
+              <Save size={19} />
+              {savingEntryBatch
+                ? "Submitting Rows..."
+                : `Submit ${entryBatchRows.length} Rows`}
+            </button>
+          )}
+
           <button
             type="submit"
             disabled={savingEntry}
@@ -3028,7 +3270,156 @@ function NewEntryView({
           </button>
         </div>
       </form>
+
+      <EntryBatchRowsTable
+        rows={entryBatchRows}
+        properties={properties}
+        vehicles={vehicles}
+        profile={profile}
+        onUpdateRow={onUpdateBatchRow}
+        onDeleteRow={onDeleteBatchRow}
+      />
     </section>
+  );
+}
+
+function EntryBatchRowsTable({
+  rows,
+  properties,
+  vehicles,
+  profile,
+  onUpdateRow,
+  onDeleteRow,
+}) {
+  if (!rows.length) return null;
+
+  return (
+    <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200">
+      <div className="border-b border-slate-100 bg-slate-50 px-5 py-4">
+        <h3 className="font-black text-slate-950">Rows Ready To Submit</h3>
+        <p className="mt-1 text-sm text-slate-500">
+          Edit any row before submitting the batch.
+        </p>
+      </div>
+
+      <div className="overflow-auto">
+        <table className="w-full min-w-[1180px] border-collapse text-left text-sm">
+          <thead className="bg-slate-50 text-slate-600">
+            <tr>
+              <TableHeader>#</TableHeader>
+              <TableHeader>Date</TableHeader>
+              <TableHeader>Vehicle</TableHeader>
+              <TableHeader>Property Code</TableHeader>
+              <TableHeader>Start Odo</TableHeader>
+              <TableHeader>Ending Odo</TableHeader>
+              <TableHeader>Miles</TableHeader>
+              <TableHeader>Purpose</TableHeader>
+              <TableHeader>Action</TableHeader>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {rows.map((row, index) => (
+              <tr key={row.id}>
+                <td className="px-4 py-4 font-black text-slate-950">
+                  {index + 1}
+                </td>
+                <td className="px-4 py-4">
+                  <input
+                    type="date"
+                    value={row.entryDate || ""}
+                    onChange={(event) =>
+                      onUpdateRow(row.id, "entryDate", event.target.value)
+                    }
+                    className="w-40 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  />
+                </td>
+                <td className="px-4 py-4">
+                  <select
+                    value={row.vehicleName || ""}
+                    onChange={(event) =>
+                      onUpdateRow(row.id, "vehicleName", event.target.value)
+                    }
+                    className="w-56 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  >
+                    <option value="">Select vehicle</option>
+                    {vehicles.map((vehicle) => {
+                      const vehicleName = getWorkerVehicleDisplayName(
+                        vehicle,
+                        profile
+                      );
+                      return (
+                        <option key={vehicle.id} value={vehicleName}>
+                          {vehicleName}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </td>
+                <td className="px-4 py-4">
+                  <PropertyCodeInput
+                    value={row.propertyCode || ""}
+                    properties={properties}
+                    onChange={(value) =>
+                      onUpdateRow(row.id, "propertyCode", value)
+                    }
+                    className="w-44"
+                  />
+                  {row.jobberVisit && (
+                    <p className="mt-1 text-xs font-black text-blue-600">
+                      Jobber
+                    </p>
+                  )}
+                </td>
+                <td className="px-4 py-4">
+                  <input
+                    type="number"
+                    value={row.startOdometer ?? ""}
+                    onChange={(event) =>
+                      onUpdateRow(row.id, "startOdometer", event.target.value)
+                    }
+                    className="w-32 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  />
+                </td>
+                <td className="px-4 py-4">
+                  <input
+                    type="number"
+                    value={row.endOdometer ?? ""}
+                    onChange={(event) =>
+                      onUpdateRow(row.id, "endOdometer", event.target.value)
+                    }
+                    className="w-32 rounded-xl border border-slate-200 px-3 py-2 font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  />
+                </td>
+                <td className="px-4 py-4 font-black text-slate-950">
+                  {formatMiles(
+                    calculateMilesFromOdometer(row.startOdometer, row.endOdometer)
+                  )}
+                </td>
+                <td className="px-4 py-4">
+                  <textarea
+                    rows="2"
+                    value={row.purpose || ""}
+                    onChange={(event) =>
+                      onUpdateRow(row.id, "purpose", event.target.value)
+                    }
+                    className="w-64 resize-none rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  />
+                </td>
+                <td className="px-4 py-4">
+                  <button
+                    type="button"
+                    onClick={() => onDeleteRow(row.id)}
+                    className="rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100"
+                  >
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -3281,6 +3672,96 @@ function TotalMilesCard({ calculatedMiles }) {
   );
 }
 
+function PropertyCodeInput({
+  value,
+  onChange,
+  properties,
+  disabled = false,
+  placeholder = "Code",
+  className = "",
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const cleanQuery = String(value || "").trim().toLowerCase();
+
+  const suggestions = useMemo(() => {
+    if (!cleanQuery) return [];
+
+    return (properties || [])
+      .filter((property) => {
+        const searchText = [
+          property.property_code,
+          property.house_number,
+          property.street_name,
+          property.street_type,
+          property.city,
+          getPropertyDisplayLabel(property),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return searchText.includes(cleanQuery);
+      })
+      .slice(0, 6);
+  }, [properties, cleanQuery]);
+
+  function handleChange(event) {
+    const nextValue = String(event.target.value || "").toUpperCase();
+    onChange(nextValue);
+    setIsOpen(Boolean(nextValue.trim()));
+  }
+
+  function selectProperty(property) {
+    onChange(property.property_code || "");
+    setIsOpen(false);
+  }
+
+  return (
+    <div className={`relative ${className}`}>
+      <input
+        type="text"
+        value={value}
+        disabled={disabled}
+        onChange={handleChange}
+        onFocus={() => {
+          if (cleanQuery) setIsOpen(true);
+        }}
+        onBlur={() => window.setTimeout(() => setIsOpen(false), 120)}
+        placeholder={placeholder}
+        className="w-full rounded-xl border border-slate-200 px-3 py-2 font-bold uppercase outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+      />
+
+      {isOpen && cleanQuery && (
+        <div className="absolute left-0 top-full z-50 mt-2 max-h-64 w-[320px] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl">
+          {suggestions.length > 0 ? (
+            suggestions.map((property) => (
+              <button
+                key={property.id || property.property_code}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => selectProperty(property)}
+                className="w-full rounded-xl px-3 py-2 text-left transition hover:bg-blue-50"
+              >
+                <p className="text-sm font-black text-slate-950">
+                  {property.property_code}
+                </p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                  {getPropertyAddressLabel(property) ||
+                    getPropertyDisplayLabel(property)}
+                </p>
+              </button>
+            ))
+          ) : (
+            <p className="px-3 py-4 text-center text-xs font-semibold text-slate-500">
+              No matching property code.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
@@ -3307,7 +3788,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
     const cleanQuery = query.trim().toLowerCase();
 
     if (!cleanQuery) {
-      return properties.slice(0, 8);
+      return [];
     }
 
     return properties
@@ -3336,7 +3817,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
     const value = event.target.value;
 
     setQuery(value);
-    setIsOpen(true);
+    setIsOpen(Boolean(value.trim()));
 
     if (selectedProperty && value !== getPropertyDisplayLabel(selectedProperty)) {
       onSelect("");
@@ -3375,7 +3856,9 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
             required
             value={query}
             onChange={handleInputChange}
-            onFocus={() => setIsOpen(true)}
+            onFocus={() => {
+              if (!selectedPropertyCode && query.trim()) setIsOpen(true);
+            }}
             placeholder="Search by property code, street, house number, or city..."
             className="w-full border-0 bg-transparent px-3 text-slate-900 outline-none placeholder:text-slate-400"
           />
@@ -3388,7 +3871,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
         </div>
       )}
 
-      {isOpen && (
+      {isOpen && query.trim() && (
         <div className="absolute left-0 right-0 top-full z-40 mt-2 max-h-80 overflow-y-auto rounded-3xl border border-slate-200 bg-white p-2 shadow-2xl">
           {filteredProperties.length > 0 ? (
             filteredProperties.map((property) => (
@@ -3427,7 +3910,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
         </div>
       )}
 
-      {isOpen && (
+      {isOpen && query.trim() && (
         <button
           type="button"
           aria-label="Close property suggestions"
@@ -4178,17 +4661,6 @@ function UploadSheetView({
                         </div>
                       </div>
 
-                      <datalist id="property-code-options">
-                        {properties.map((property) => (
-                          <option
-                            key={property.id}
-                            value={property.property_code}
-                          >
-                            {getPropertyDisplayLabel(property)}
-                          </option>
-                        ))}
-                      </datalist>
-
                       {hasDetectedTotalMismatch && !isSubmitted && (
                         <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold leading-6 text-amber-800">
                           The scanned sheet total is {formatMiles(detectedTotalMiles)}, but the draft rows add up to {formatMiles(draftTotalMiles)}.
@@ -4274,16 +4746,15 @@ function UploadSheetView({
                                 </td>
 
                                 <td className="px-3 py-3">
-                                  <input
-                                    type="text"
-                                    list="property-code-options"
+                                  <PropertyCodeInput
                                     value={row.property_code || ""}
                                     disabled={isSubmitted}
+                                    properties={properties}
                                     onChange={(event) =>
-                                      onUpdateDraftEntry(row.id, "property_code", event.target.value)
+                                      onUpdateDraftEntry(row.id, "property_code", event)
                                     }
                                     placeholder="Select code"
-                                    className="w-44 rounded-xl border border-slate-200 px-3 py-2 font-bold uppercase outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                    className="w-44"
                                   />
                                 </td>
 

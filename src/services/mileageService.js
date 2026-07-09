@@ -201,6 +201,7 @@ export async function saveWorkerMileageEntry({
   purpose,
   jobberVisit = null,
   jobberTimesheetId = null,
+  status = "saved",
 }) {
   if (!profile?.id) {
     throw new Error("Worker profile is missing.");
@@ -269,7 +270,7 @@ export async function saveWorkerMileageEntry({
     miles,
     purpose: purpose?.trim() || null,
     vehicle: vehicleName,
-    status: "saved",
+    status,
     jobber_timesheet_id: jobberTimesheetId,
     ...jobberPayload,
     ...buildMileageWorkflowFields({
