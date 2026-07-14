@@ -197,6 +197,7 @@ export default function WorkerDashboard() {
   const [uploadSuccess, setUploadSuccess] = useState("");
 
   const [paperDraftEntries, setPaperDraftEntries] = useState([]);
+  const [selectedPaperUploadId, setSelectedPaperUploadId] = useState("");
   const [convertingUploadId, setConvertingUploadId] = useState("");
   const [savingDraftUploadId, setSavingDraftUploadId] = useState("");
   const [submittingDraftUploadId, setSubmittingDraftUploadId] = useState("");
@@ -1548,6 +1549,10 @@ export default function WorkerDashboard() {
 
       if (deleteRowError) throw deleteRowError;
 
+      if (String(selectedPaperUploadId) === String(upload.id)) {
+        setSelectedPaperUploadId("");
+      }
+
       await refreshPaperUploads(profile.id);
       setUploadSuccess("Paper sheet upload deleted.");
     } catch (error) {
@@ -1584,6 +1589,7 @@ export default function WorkerDashboard() {
         refreshPaperDraftEntries(profile.id),
       ]);
 
+      setSelectedPaperUploadId(upload.id);
       setDraftSuccess(
         "AI scan finished. Please review and edit flagged draft rows before submitting."
       );
@@ -1666,6 +1672,7 @@ export default function WorkerDashboard() {
   function handleAddPaperDraftRow(upload) {
     if (!profile?.id || !upload?.id) return;
     paperDraftHasUnsavedEditsRef.current = true;
+    setSelectedPaperUploadId(upload.id);
 
     const uploadRows = getRenumberedPaperDraftRows(
       paperDraftEntries.filter((row) => {
@@ -2161,6 +2168,8 @@ export default function WorkerDashboard() {
                 uploadError={uploadError}
                 uploadSuccess={uploadSuccess}
                 draftEntries={paperDraftEntries}
+                selectedUploadId={selectedPaperUploadId}
+                setSelectedUploadId={setSelectedPaperUploadId}
                 properties={properties}
                 vehicles={vehicles}
                 entries={entries}
@@ -4356,6 +4365,8 @@ function UploadSheetView({
   uploadError,
   uploadSuccess,
   draftEntries,
+  selectedUploadId,
+  setSelectedUploadId,
   properties,
   vehicles,
   entries,
@@ -4542,6 +4553,7 @@ function UploadSheetView({
               const isSaving = savingDraftUploadId === upload.id;
               const isSubmitting = submittingDraftUploadId === upload.id;
               const isSubmitted = upload.ai_status === "submitted" || upload.status === "converted";
+              const isSelected = String(selectedUploadId) === String(upload.id);
 
               return (
                 <div
@@ -4609,6 +4621,22 @@ function UploadSheetView({
 
                         <button
                           type="button"
+                          onClick={() =>
+                            setSelectedUploadId(isSelected ? "" : upload.id)
+                          }
+                          className={
+                            "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-black transition " +
+                            (isSelected
+                              ? "bg-slate-900 text-white hover:bg-slate-800"
+                              : "bg-slate-100 text-slate-700 hover:bg-slate-200")
+                          }
+                        >
+                          <ClipboardList size={14} />
+                          {isSelected ? "Close Rows" : "View Rows"}
+                        </button>
+
+                        <button
+                          type="button"
                           onClick={() => onDeleteUpload(upload)}
                           className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100"
                         >
@@ -4634,7 +4662,7 @@ function UploadSheetView({
                     </div>
                   </div>
 
-                  {uploadDraftRows.length > 0 ? (
+                  {isSelected && (uploadDraftRows.length > 0 ? (
                     <div className="p-5">
                       <div className="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-center">
                         <div>
@@ -4939,7 +4967,7 @@ function UploadSheetView({
                         </button>
                       )}
                     </div>
-                  )}
+                  ))}
                 </div>
               );
             })
