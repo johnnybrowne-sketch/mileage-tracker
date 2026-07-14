@@ -2032,7 +2032,7 @@ export default function WorkerDashboard() {
                 <select
                   value={selectedMonth}
                   onChange={(event) => setSelectedMonth(event.target.value)}
-                  className="hidden rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 sm:block"
+                  className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                 >
                   {monthOptions.map((monthKey) => (
                     <option key={monthKey} value={monthKey}>
@@ -2770,7 +2770,7 @@ function SidebarContent({
 
 function MobileNav({ activeView, setActiveView, badgeCounts = {} }) {
   return (
-    <div className="mb-6 rounded-3xl bg-white p-3 shadow-sm ring-1 ring-slate-200 lg:hidden">
+    <div className="prosper-mobile-nav mb-6 rounded-3xl bg-white p-3 shadow-sm ring-1 ring-slate-200 lg:hidden">
       <div className="mb-3 flex items-center justify-center rounded-2xl bg-slate-50 p-3 ring-1 ring-slate-200">
         <LogoCard
           wrapperClassName="rounded-2xl bg-white p-2 shadow-sm ring-1 ring-slate-200"
@@ -2779,7 +2779,22 @@ function MobileNav({ activeView, setActiveView, badgeCounts = {} }) {
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <label className="mb-2 block text-[11px] font-black uppercase tracking-wide text-slate-500 sm:hidden">
+        Choose Feature
+      </label>
+      <select
+        value={activeView}
+        onChange={(event) => setActiveView(event.target.value)}
+        className="mb-3 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-800 shadow-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 sm:hidden"
+      >
+        {navigationItems.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+
+      <div className="hidden grid-cols-2 gap-2 sm:grid sm:grid-cols-3">
         {navigationItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeView === item.id;

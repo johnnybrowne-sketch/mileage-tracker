@@ -22,7 +22,7 @@
   function shouldIgnore(element) {
     return Boolean(
       element.closest(
-        ".prosper-mobile-menu-drawer, .prosper-mobile-menu-overlay, .prosper-mobile-menu-button, header, form"
+        ".prosper-mobile-nav, .prosper-mobile-menu-drawer, .prosper-mobile-menu-overlay, .prosper-mobile-menu-button, header, form"
       )
     );
   }
