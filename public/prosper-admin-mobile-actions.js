@@ -240,7 +240,7 @@
     scrollToElement(target);
 
     window.setTimeout(() => {
-      if (window.innerWidth <= 768 && composer.focus) {
+      if (window.innerWidth <= 1023 && composer.focus) {
         composer.focus({ preventScroll: true });
       }
     }, 450);

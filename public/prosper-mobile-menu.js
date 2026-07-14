@@ -1,5 +1,5 @@
 (() => {
-  const MOBILE_QUERY = "(max-width: 768px)";
+  const MOBILE_QUERY = "(max-width: 1023px)";
   const mediaQuery = window.matchMedia(MOBILE_QUERY);
 
   let button;

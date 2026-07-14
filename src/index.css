@@ -841,3 +841,386 @@ button:disabled {
 
 /* PROSPER SAFE MOBILE MENU HIDE AND BACK END */
 
+
+/* PROSPER PHONE AND TABLET RESPONSIVE SAFETY START */
+
+@media (max-width: 1023px) {
+  html,
+  body,
+  #root {
+    width: 100% !important;
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+  }
+
+  body {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body.prosper-app-page aside {
+    display: none !important;
+  }
+
+  body.prosper-app-page header {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 50 !important;
+
+    min-height: 4rem !important;
+    padding: 0.65rem 0.75rem 0.65rem 4.35rem !important;
+
+    background: rgba(255, 255, 255, 0.96) !important;
+    border-bottom: 1px solid #dbe7f3 !important;
+    backdrop-filter: blur(14px);
+  }
+
+  body.prosper-app-page header img {
+    max-height: 42px !important;
+    width: auto !important;
+  }
+
+  body.prosper-app-page main {
+    width: 100% !important;
+    max-width: 100vw !important;
+    padding: 1rem !important;
+    overflow-x: hidden !important;
+  }
+
+  body.prosper-app-page header > div,
+  body.prosper-app-page main > div,
+  body.prosper-app-page section,
+  body.prosper-app-page article,
+  body.prosper-app-page form,
+  body.prosper-app-page [class*="max-w-"] {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  body.prosper-app-page [class*="overflow-x-auto"],
+  body.prosper-app-page [class*="overflow-auto"] {
+    max-width: 100% !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body.prosper-app-page [class*="lg:grid-cols"],
+  body.prosper-app-page [class*="xl:grid-cols"],
+  body.prosper-app-page [class*="2xl:grid-cols"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body.prosper-app-page [class*="lg:flex-row"],
+  body.prosper-app-page [class*="xl:flex-row"],
+  body.prosper-app-page [class*="2xl:flex-row"] {
+    flex-direction: column !important;
+  }
+
+  body.prosper-app-page input,
+  body.prosper-app-page select,
+  body.prosper-app-page textarea,
+  body.prosper-app-page button {
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  body.prosper-app-page input,
+  body.prosper-app-page select,
+  body.prosper-app-page textarea {
+    font-size: 16px !important;
+  }
+
+  body.prosper-app-page [data-prosper-inline-menu-hidden="true"],
+  body.prosper-app-page .prosper-mobile-inline-menu-hidden {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-button {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 0.55rem);
+    left: 0.6rem;
+    z-index: 10000;
+
+    display: inline-flex !important;
+    width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+
+    border: 1px solid rgba(203, 213, 225, 0.95);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.98);
+    color: #0f172a;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+    backdrop-filter: blur(16px);
+
+    font-size: 23px;
+    font-weight: 900;
+    cursor: pointer;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-button.is-hidden,
+  body.prosper-app-page .prosper-mobile-menu-button.is-drawer-open {
+    display: none !important;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+
+    display: block !important;
+    opacity: 0;
+    pointer-events: none;
+
+    background: rgba(15, 23, 42, 0.42);
+    backdrop-filter: blur(3px);
+    transition: opacity 180ms ease;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-overlay.is-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 9999;
+
+    display: flex !important;
+    width: min(88vw, 360px);
+    height: 100dvh;
+    flex-direction: column;
+
+    background: #ffffff;
+    box-shadow: 24px 0 70px rgba(15, 23, 42, 0.26);
+    transform: translateX(-104%);
+    transition: transform 220ms ease;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-drawer.is-open {
+    transform: translateX(0);
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+
+    padding: calc(env(safe-area-inset-top, 0px) + 1rem) 1rem 1rem;
+    border-bottom: 1px solid #e2e8f0;
+    background: linear-gradient(135deg, #0b2f4f, #1f6f7a);
+    color: white;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-title {
+    min-width: 0;
+    padding-left: 0 !important;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-title strong {
+    display: block;
+    font-size: 1rem;
+    font-weight: 950;
+    line-height: 1.2;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-title span {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    opacity: 0.8;
+    text-transform: uppercase;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-close {
+    display: inline-flex;
+    width: 40px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+
+    border: 0;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.14);
+    color: white;
+    font-size: 24px;
+    font-weight: 900;
+    cursor: pointer;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.75rem;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-item {
+    display: flex;
+    width: 100%;
+    min-height: 54px;
+    align-items: center;
+    gap: 0.8rem;
+
+    margin-bottom: 0.5rem;
+    padding: 0.75rem 0.85rem;
+
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    background: #f8fafc;
+    color: #334155;
+
+    font-size: 0.9rem;
+    font-weight: 850;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-item.is-active {
+    border-color: #2563eb;
+    background: #2563eb;
+    color: white;
+    box-shadow: 0 12px 25px rgba(37, 99, 235, 0.22);
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-icon {
+    display: inline-flex;
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 11px;
+    background: rgba(37, 99, 235, 0.09);
+    font-size: 16px;
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-item.is-active .prosper-mobile-menu-icon {
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  body.prosper-app-page .prosper-mobile-menu-footer {
+    padding: 0.75rem 1rem calc(env(safe-area-inset-bottom, 0px) + 1rem);
+    border-top: 1px solid #e2e8f0;
+    color: #64748b;
+    font-size: 0.78rem;
+    font-weight: 750;
+    line-height: 1.5;
+  }
+
+  body.prosper-app-page .prosper-mobile-back-overview {
+    position: fixed;
+    left: 0.65rem;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
+    z-index: 9500;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+
+    min-height: 42px;
+    padding: 0.65rem 0.9rem;
+
+    border: 1px solid rgba(203, 213, 225, 0.95);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.96);
+    color: #0f172a;
+
+    font-size: 0.84rem;
+    font-weight: 900;
+    box-shadow: 0 14px 34px rgba(15, 23, 42, 0.16);
+    backdrop-filter: blur(16px);
+    cursor: pointer;
+  }
+
+  body.prosper-app-page .prosper-mobile-back-overview.is-hidden {
+    display: none !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  body.prosper-app-page .prosper-mobile-menu-button,
+  body.prosper-app-page .prosper-mobile-menu-overlay,
+  body.prosper-app-page .prosper-mobile-menu-drawer,
+  body.prosper-app-page .prosper-mobile-back-overview {
+    display: none !important;
+  }
+}
+
+@media (max-width: 640px) {
+  body.prosper-app-page main {
+    padding: 0.7rem !important;
+  }
+
+  body.prosper-app-page [class*="w-["] {
+    max-width: calc(100vw - 1.5rem) !important;
+  }
+
+  body.prosper-app-page td[data-label] {
+    display: grid !important;
+    grid-template-columns: minmax(5.75rem, 34%) minmax(0, 1fr);
+    align-items: start !important;
+    justify-content: stretch !important;
+    gap: 0.65rem !important;
+  }
+
+  body.prosper-app-page td[data-label]::before {
+    grid-column: 1;
+    max-width: none !important;
+    overflow-wrap: anywhere;
+  }
+
+  body.prosper-app-page td[data-label] > * {
+    grid-column: 2;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  body.prosper-app-page td[data-label] button,
+  body.prosper-app-page td[data-label] a {
+    width: auto !important;
+    max-width: 100% !important;
+    justify-self: start;
+  }
+
+  body.prosper-app-page td:not([data-label]),
+  body.prosper-app-page td[data-label=""] {
+    display: block !important;
+  }
+
+  body.prosper-app-page td:not([data-label]) > *,
+  body.prosper-app-page td[data-label=""] > * {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  body.prosper-app-page td input,
+  body.prosper-app-page td select,
+  body.prosper-app-page td textarea {
+    width: 100% !important;
+  }
+
+  body.prosper-app-page td [class*="absolute"],
+  body.prosper-app-page td [role="listbox"] {
+    max-width: calc(100vw - 2rem) !important;
+    max-height: min(55dvh, 360px) !important;
+  }
+}
+
+/* PROSPER PHONE AND TABLET RESPONSIVE SAFETY END */

@@ -1,6 +1,6 @@
 (() => {
   function isMobile() {
-    return window.innerWidth <= 768;
+    return window.innerWidth <= 1023;
   }
 
   function isAppPage() {
