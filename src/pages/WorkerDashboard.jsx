@@ -450,7 +450,6 @@ export default function WorkerDashboard() {
         workerEntries,
         workerVehicles,
         sharedVehicleOdometers,
-        workerTimesheets,
       } = await refreshAllWorkerData(
         workerProfile.id,
         workerProfile.email || session.user.email || ""
@@ -486,18 +485,7 @@ export default function WorkerDashboard() {
         }));
       }
 
-      const availableMonths = [
-        ...getMonthOptionsFromEntries(workerEntries),
-        ...(workerTimesheets || [])
-          .map(getTimesheetMonthKey)
-          .filter(Boolean),
-      ];
-
-      if (availableMonths.length > 0) {
-        setSelectedMonth(Array.from(new Set(availableMonths)).sort().reverse()[0]);
-      } else {
-        setSelectedMonth(getCurrentMonthKey());
-      }
+      setSelectedMonth(getCurrentMonthKey());
     } catch (error) {
       console.error(error);
       setDataError(
@@ -4409,6 +4397,54 @@ function UploadSheetView({
       )
     );
   }, [vehicles, profile]);
+  const [expandedUploadIds, setExpandedUploadIds] = useState(new Set());
+
+  function isPaperUploadExpanded(upload) {
+    return (
+      expandedUploadIds.has(String(upload.id)) ||
+      String(selectedUploadId) === String(upload.id)
+    );
+  }
+
+  function togglePaperUploadDetails(upload) {
+    setExpandedUploadIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      const uploadId = String(upload.id);
+
+      if (nextIds.has(uploadId)) {
+        nextIds.delete(uploadId);
+      } else {
+        nextIds.add(uploadId);
+      }
+
+      return nextIds;
+    });
+  }
+
+  function handlePaperUploadRowsToggle(upload, isSelected) {
+    if (isSelected) {
+      setSelectedUploadId("");
+      window.setTimeout(() => {
+        document
+          .getElementById(getPaperUploadElementId("worker-paper-upload", upload.id))
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 60);
+      return;
+    }
+
+    setExpandedUploadIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      nextIds.add(String(upload.id));
+      return nextIds;
+    });
+    setSelectedUploadId(upload.id);
+
+    window.setTimeout(() => {
+      document
+        .getElementById(getPaperUploadElementId("worker-paper-rows", upload.id))
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }
 
   return (
     <section className="space-y-6">
@@ -4569,11 +4605,24 @@ function UploadSheetView({
               const isSubmitting = submittingDraftUploadId === upload.id;
               const isSubmitted = upload.ai_status === "submitted" || upload.status === "converted";
               const isSelected = String(selectedUploadId) === String(upload.id);
+              const isExpanded = isPaperUploadExpanded(upload);
+              const uploadElementId = getPaperUploadElementId(
+                "worker-paper-upload",
+                upload.id
+              );
+              const rowsElementId = getPaperUploadElementId(
+                "worker-paper-rows",
+                upload.id
+              );
 
               return (
                 <div
                   key={upload.id}
-                  className="overflow-hidden rounded-3xl border border-slate-200 bg-white"
+                  id={uploadElementId}
+                  className={
+                    "prosper-paper-upload-card overflow-hidden rounded-3xl border border-slate-200 bg-white " +
+                    (isExpanded ? "is-expanded" : "")
+                  }
                 >
                   <div className="border-b border-slate-100 bg-slate-50 p-5">
                     <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-start">
@@ -4591,20 +4640,28 @@ function UploadSheetView({
                           Uploaded {formatDate(upload.created_at)} • {formatPaperUploadMonth(upload.month_key)} • {formatFileSize(upload.file_size)}
                         </p>
 
+                        <button
+                          type="button"
+                          onClick={() => togglePaperUploadDetails(upload)}
+                          className="mt-3 inline-flex items-center justify-center rounded-xl bg-white px-3 py-2 text-xs font-black text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:hidden"
+                        >
+                          {isExpanded ? "Hide Info" : "Show Info"}
+                        </button>
+
                         {upload.notes && (
-                          <p className="mt-3 max-w-3xl rounded-2xl bg-white p-3 text-sm leading-6 text-slate-600 ring-1 ring-slate-200">
+                          <p className="prosper-paper-upload-extra mt-3 max-w-3xl rounded-2xl bg-white p-3 text-sm leading-6 text-slate-600 ring-1 ring-slate-200">
                             {upload.notes}
                           </p>
                         )}
 
                         {upload.ai_error && (
-                          <p className="mt-3 rounded-2xl bg-red-50 p-3 text-sm font-semibold leading-6 text-red-700">
+                          <p className="prosper-paper-upload-extra mt-3 rounded-2xl bg-red-50 p-3 text-sm font-semibold leading-6 text-red-700">
                             {upload.ai_error}
                           </p>
                         )}
                       </div>
 
-                      <div className="flex flex-wrap gap-2">
+                      <div className="prosper-paper-upload-actions flex flex-wrap gap-2">
                         <button
                           type="button"
                           onClick={() => onOpenUpload(upload)}
@@ -4636,9 +4693,7 @@ function UploadSheetView({
 
                         <button
                           type="button"
-                          onClick={() =>
-                            setSelectedUploadId(isSelected ? "" : upload.id)
-                          }
+                          onClick={() => handlePaperUploadRowsToggle(upload, isSelected)}
                           className={
                             "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-black transition " +
                             (isSelected
@@ -4661,7 +4716,7 @@ function UploadSheetView({
                       </div>
                     </div>
 
-                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <div className="prosper-paper-upload-extra mt-4 grid gap-3 md:grid-cols-3">
                       <ReportMiniCard
                         label="Detected Total"
                         value={formatMiles(upload.total_mileage_detected || 0)}
@@ -4678,7 +4733,7 @@ function UploadSheetView({
                   </div>
 
                   {isSelected && (uploadDraftRows.length > 0 ? (
-                    <div className="p-5">
+                    <div id={rowsElementId} className="p-5">
                       <div className="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-center">
                         <div>
                           <h4 className="font-black text-slate-950">
@@ -4963,7 +5018,7 @@ function UploadSheetView({
                       </div>
                     </div>
                   ) : (
-                    <div className="p-5 text-center">
+                    <div id={rowsElementId} className="p-5 text-center">
                       <p className="font-black text-slate-950">
                         No AI draft rows yet.
                       </p>
@@ -5003,6 +5058,10 @@ function UploadSheetView({
       </div>
     </section>
   );
+}
+
+function getPaperUploadElementId(prefix, uploadId) {
+  return `${prefix}-${String(uploadId || "upload").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 
 function ReportMiniCard({ label, value }) {

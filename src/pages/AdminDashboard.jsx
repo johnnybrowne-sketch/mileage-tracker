@@ -1013,16 +1013,7 @@ export default function AdminDashboard() {
     setDataError("");
 
     if (shouldSetMonth) {
-      const availableMonths = [
-        ...getMonthOptionsFromEntries(entryRows),
-        ...(jobberTimesheetsResult.data || [])
-          .map(getTimesheetMonthKey)
-          .filter(Boolean),
-      ];
-
-      if (availableMonths.length > 0) {
-        setSelectedMonth(Array.from(new Set(availableMonths)).sort().reverse()[0]);
-      }
+      setSelectedMonth(getCurrentMonthKey());
     }
 
     return {
@@ -5181,6 +5172,54 @@ function PaperSheetsReviewView({
   const selectedDraftTotal = selectedDraftRows.reduce((total, row) => {
     return total + Number(row.miles || 0);
   }, 0);
+  const [expandedUploadIds, setExpandedUploadIds] = useState(new Set());
+
+  function isPaperUploadExpanded(upload) {
+    return (
+      expandedUploadIds.has(String(upload.id)) ||
+      String(selectedUploadId) === String(upload.id)
+    );
+  }
+
+  function togglePaperUploadDetails(upload) {
+    setExpandedUploadIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      const uploadId = String(upload.id);
+
+      if (nextIds.has(uploadId)) {
+        nextIds.delete(uploadId);
+      } else {
+        nextIds.add(uploadId);
+      }
+
+      return nextIds;
+    });
+  }
+
+  function handlePaperUploadRowsOpen(upload) {
+    setExpandedUploadIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      nextIds.add(String(upload.id));
+      return nextIds;
+    });
+    setSelectedUploadId(upload.id);
+
+    window.setTimeout(() => {
+      document
+        .getElementById(getPaperUploadElementId("admin-paper-rows", upload.id))
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }
+
+  function handleCloseSelectedUploadRows() {
+    setSelectedUploadId("");
+
+    window.setTimeout(() => {
+      document
+        .getElementById("admin-paper-upload-list")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 60);
+  }
 
   return (
     <section className="space-y-6">
@@ -5358,7 +5397,10 @@ function PaperSheetsReviewView({
         {error && <div className="mt-5"><AlertBox type="error" message={error} /></div>}
         {success && <div className="mt-5"><AlertBox type="success" message={success} /></div>}
 
-        <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200">
+        <div
+          id="admin-paper-upload-list"
+          className="mt-6 overflow-hidden rounded-3xl border border-slate-200"
+        >
           <div className="max-h-[720px] overflow-auto">
             <table className="w-full min-w-[1650px] border-collapse text-left text-sm">
               <thead className="bg-slate-50 text-slate-600">
@@ -5388,9 +5430,16 @@ function PaperSheetsReviewView({
                       return total + Number(row.miles || 0);
                     }, 0);
                     const isConverting = convertingUploadId === upload.id;
+                    const isExpanded = isPaperUploadExpanded(upload);
 
                     return (
-                      <tr key={upload.id} className="bg-white">
+                      <tr
+                        key={upload.id}
+                        className={
+                          "prosper-paper-upload-card bg-white " +
+                          (isExpanded ? "is-expanded" : "")
+                        }
+                      >
                         <td className="px-4 py-4">
                           <p className="font-black text-slate-950">
                             {formatDate(upload.created_at)}
@@ -5500,8 +5549,16 @@ function PaperSheetsReviewView({
                           <div className="flex flex-wrap gap-2">
                             <button
                               type="button"
+                              onClick={() => togglePaperUploadDetails(upload)}
+                              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white transition hover:bg-slate-800 sm:hidden"
+                            >
+                              {isExpanded ? "Hide Info" : "Details"}
+                            </button>
+
+                            <button
+                              type="button"
                               onClick={() => onOpenUpload(upload)}
-                              className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100"
+                              className="prosper-paper-upload-actions-extra inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100"
                             >
                               <FileUp size={14} />
                               Open
@@ -5511,15 +5568,15 @@ function PaperSheetsReviewView({
                               type="button"
                               disabled={isConverting}
                               onClick={() => onConvertUpload(upload)}
-                              className="inline-flex items-center gap-2 rounded-xl bg-violet-50 px-3 py-2 text-xs font-black text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              className="prosper-paper-upload-actions-extra inline-flex items-center gap-2 rounded-xl bg-violet-50 px-3 py-2 text-xs font-black text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {isConverting ? "Scanning..." : "Scan With AI"}
                             </button>
 
                             <button
                               type="button"
-                              onClick={() => setSelectedUploadId(upload.id)}
-                              className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-200"
+                              onClick={() => handlePaperUploadRowsOpen(upload)}
+                              className="prosper-paper-upload-actions-extra inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-200"
                             >
                               View Rows
                             </button>
@@ -5528,7 +5585,7 @@ function PaperSheetsReviewView({
                               type="button"
                               disabled={updatingUploadId === upload.id}
                               onClick={() => onDeleteUpload(upload)}
-                              className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              className="prosper-paper-upload-actions-extra inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               <Trash2 size={14} />
                               Delete
@@ -5555,7 +5612,10 @@ function PaperSheetsReviewView({
       </div>
 
       {selectedUpload && (
-        <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200 xl:p-8">
+        <div
+          id={getPaperUploadElementId("admin-paper-rows", selectedUpload.id)}
+          className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200 xl:p-8"
+        >
           <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
             <SectionTitle
               eyebrow="AI Draft Rows"
@@ -5596,7 +5656,7 @@ function PaperSheetsReviewView({
 
               <button
                 type="button"
-                onClick={() => setSelectedUploadId("")}
+                onClick={handleCloseSelectedUploadRows}
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
               >
                 Close Rows
@@ -5910,6 +5970,10 @@ function PaperSheetsReviewView({
       )}
     </section>
   );
+}
+
+function getPaperUploadElementId(prefix, uploadId) {
+  return `${prefix}-${String(uploadId || "upload").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 
 function AiStatusBadge({ status }) {
