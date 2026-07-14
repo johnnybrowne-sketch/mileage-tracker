@@ -215,7 +215,7 @@ def build_manual():
     story.append(p("Mileage Tracker Worker User Manual", "CoverTitle"))
     story.append(
         p(
-            "Updated June 30, 2026. This manual explains the full worker flow: account setup, mileage entry, Jobber work, timesheets, company vehicle odometers, reports, paper sheets, messages, route tools, and support.",
+            "Updated July 14, 2026. This manual explains the full worker flow: account setup, single and multiple mileage entries, Jobber work, timesheets, company vehicle odometers, reports, paper sheets, AI draft rows, messages, route tools, and support.",
             "CoverSubtitle",
         )
     )
@@ -259,10 +259,10 @@ def build_manual():
     story += section("3. Worker Dashboard Features")
     story.append(feature_table([
         ("Overview", "Shows the selected month, your role, latest vehicle, total entries, total miles, paper uploads, quick actions, recent mileage, the manual, and Central Wisconsin Map Search."),
-        ("New Mileage Entry", "Use this for daily mileage. Add date, vehicle, Jobber job or property, odometer readings, purpose, and note."),
+        ("New Mileage Entry", "Use this for daily mileage. Save one entry, or use Add Row to prepare and submit multiple entries together."),
         ("Timesheets", "Review synced Jobber time records and add mileage to timesheets that involved driving."),
         ("Mileage History", "Review saved entries, edit corrections when allowed, and download a CSV for the selected month."),
-        ("Upload Paper Sheet", "Upload a JPG, PNG, WEBP, or PDF paper mileage sheet. AI scanning can turn it into editable draft rows."),
+        ("Upload Paper Sheet", "Upload a JPG, PNG, WEBP, or PDF paper mileage sheet from the top of the page. AI scanning can turn it into editable draft rows, and you can add missing rows manually."),
         ("Messages", "Chat with admin about missing vehicles, property questions, paper sheets, and corrections."),
         ("Help", "Open this manual, use help cards, and search routes with Google Maps."),
     ]))
@@ -271,21 +271,25 @@ def build_manual():
     story += section("4. New Mileage Entry: Step By Step")
     story.append(numbered([
         "Open New Mileage Entry.",
-        "Choose the trip date.",
+        "Choose the trip date. When you are entering several trips, the last date you used stays available so nearby dates are easier to pick.",
         "Choose the vehicle. If it is a company fleet vehicle, select the exact unit such as Van #1, Van #2, Tall Boy #6, or Tall Boy #7.",
         "If the vehicle is missing, choose Other company vehicle and type the exact vehicle name.",
         "If the mileage is for Jobber work, select the Jobber Visit or Jobber Job from the Jobber picker.",
         "If the mileage is not tied to Jobber, search and select the normal Prosper property.",
         "Enter the start odometer and end odometer.",
-        "Add a purpose or note that explains why the trip happened.",
+        "Add a purpose or note that explains why the trip happened. The last purpose you used can help you enter similar rows faster.",
         "Review Total Miles. It is calculated as End Odo minus Start Odo.",
-        "Click Save Entry.",
+        "Click Save Entry if you are submitting only this one trip.",
+        "Click Add Row when you want to stage the current trip and continue adding more entries before final submission.",
+        "Review Rows Ready To Submit. You can edit date, vehicle, property code, odometers, miles, purpose, or delete a row before submitting.",
+        "Click Submit Rows when the staged rows are complete.",
     ]))
     story.append(callout("Jobber entry: select Jobber and save without selecting a separate normal property. Non-Jobber entry: select the normal property before saving.", GREEN))
     story.append(feature_table([
         ("Required Fields", "Date, vehicle, Jobber job/timesheet or property, start odometer, and end odometer."),
         ("Purpose / Note", "Use this for details like inspection, showing, office errand, supply run, keys, signs, or why an odometer was different."),
         ("End Odometer", "The end odometer must be the same as or higher than the start odometer."),
+        ("Multiple Entries", "Use Add Row when entering a whole day, week, or late monthly batch. Submit Rows only after reviewing the staged table."),
     ]))
 
     story += section("5. Vehicle Dropdown, Fleet Units, And Privacy")
@@ -377,20 +381,30 @@ def build_manual():
 
     story.append(PageBreak())
     story += section("12. Paper Sheets And AI Draft Rows")
-    story.append(p("Use Upload Paper Sheet when mileage was written on a paper form or needs manual review. Uploads go to admin immediately. AI scanning can create editable draft rows from the uploaded sheet."))
+    story.append(p("Use Upload Paper Sheet when mileage was written on a paper form or needs manual review. The upload form is at the top of the page, and uploaded files go to admin immediately. AI scanning can create editable draft rows from the uploaded sheet, including multi-page PDFs."))
     story.append(numbered([
         "Open Upload Paper Sheet.",
-        "Choose a clear JPG, PNG, WEBP, or PDF file up to 10 MB.",
+        "Choose or drag in a clear JPG, PNG, WEBP, or PDF file up to 10 MB. If one PDF has multiple pages, upload it as one file so the rows can be reviewed together.",
         "Select the mileage month.",
         "Add notes for admin, especially if a row is circled or hard to read.",
         "Click Upload Paper Sheet.",
         "In Upload History, click Open to view the file when needed.",
         "Use Scan With AI to create editable draft rows.",
-        "Review every draft row: date, vehicle, property text, property code, start odometer, end odometer, miles, and purpose.",
-        "Use Save Draft while correcting rows.",
+        "Review every draft row: date, vehicle, property code, property address, start odometer, end odometer, miles, and purpose.",
+        "Choose the exact vehicle from the dropdown. Selecting a vehicle can apply it across the sheet when all rows came from the same vehicle.",
+        "Use Add Row if the AI missed a line, or if you need to enter rows manually before or after scanning.",
+        "Use Delete only for rows that should not be submitted. Remaining entry numbers automatically close the gap.",
+        "Check that the property code matches the property address, the start and end odometers are correct, and the Miles value matches the odometer difference.",
+        "If the start odometer does not match the shared company vehicle reading, enter the real reading and add the override note requested by the app.",
+        "Use Save Draft while correcting rows so your edits stay attached to the upload.",
         "Click Submit Entries only after every row is accurate.",
     ]))
-    story.append(callout("AI draft rows are a helper, not a final answer. Always review and correct them before submitting.", AMBER))
+    story.append(callout("AI draft rows are a helper, not a final answer. Always review and correct vehicle, property code, odometers, miles, and purpose before submitting.", AMBER))
+    story.append(feature_table([
+        ("Property Code Suggestions", "Suggestions appear after you start typing a code or address. Choose the correct property so reports stay clean."),
+        ("Not Readable", "If AI cannot read a row, fix the field before submitting. Rows marked Review are intentionally blocked until corrected or explained."),
+        ("Add Row After AI Scan", "Use Add Row to add a missing mileage line to the scanned table. Save Draft or Submit Entries after reviewing the final table."),
+    ]))
 
     story += section("13. Messages, Help, And Map Search")
     story.append(feature_table([
@@ -415,6 +429,7 @@ def build_manual():
         ("End Odo Error", "End odometer must be greater than or equal to start odometer."),
         ("No Jobber Record", "Use the normal property if the trip is not tied to Jobber. Message admin if a Jobber job should be synced but is missing."),
         ("Property Not Found", "Search by address, property code, house number, or city. If it still does not appear, message admin."),
+        ("Paper Sheet Row Missing", "Open the uploaded sheet and use Add Row in the AI draft table. Then complete the row before submitting."),
         ("CSV Looks Missing Data", "Older entries may not have all new Jobber or bucket fields. They should still display gracefully with the information available."),
         ("Jobber Link Error", "Message admin with the job title or screenshot. The Jobber record may have changed or your Jobber permissions may not include that job."),
     ]))
@@ -429,6 +444,7 @@ def build_manual():
         "Normal property selected when there is no Jobber record.",
         "Start odometer matches the shared odometer, or an override reason is entered.",
         "End odometer is correct.",
+        "Miles matches End Odo minus Start Odo.",
         "Purpose or note explains the trip clearly.",
         "Total Miles looks reasonable before saving.",
     ]))

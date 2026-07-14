@@ -4385,104 +4385,110 @@ function UploadSheetView({
   }, [vehicles, profile]);
 
   return (
-    <section className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
-      <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
-        <div className="mb-6 inline-flex rounded-2xl bg-blue-50 p-3 text-blue-600">
-          <FileUp size={28} />
+    <section className="space-y-6">
+      <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200 xl:p-8">
+        <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
+          <SectionTitle
+            eyebrow="Paper Sheet Upload"
+            title="Upload Mileage Form"
+            text="Upload a photo or PDF of a paper mileage sheet. Admin receives the document immediately and AI scan can turn it into editable draft rows."
+          />
+
+          <div className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+            <FileUp size={28} />
+          </div>
         </div>
 
-        <SectionTitle
-          eyebrow="Paper Sheet Upload"
-          title="Upload Mileage Form"
-          text="Upload a photo or PDF of a paper mileage sheet. Admin receives the document immediately and AI scan can turn it into editable draft rows."
-        />
+        <form onSubmit={onUpload} className="mt-6">
+          <div className="grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
+            <div
+              onDrop={onFileDrop}
+              onDragOver={(event) => event.preventDefault()}
+              className="flex min-h-[260px] flex-col justify-center rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/50 p-6 text-center transition hover:border-blue-300 hover:bg-blue-50"
+            >
+              <FileUp className="mx-auto text-blue-600" size={42} />
 
-        <form onSubmit={onUpload} className="mt-6 space-y-5">
-          <div
-            onDrop={onFileDrop}
-            onDragOver={(event) => event.preventDefault()}
-            className="rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/50 p-6 text-center transition hover:border-blue-300 hover:bg-blue-50"
-          >
-            <FileUp className="mx-auto text-blue-600" size={42} />
+              <h3 className="mt-4 text-lg font-black text-slate-950">
+                Choose Or Drop Paper Sheet File
+              </h3>
 
-            <h3 className="mt-4 text-lg font-black text-slate-950">
-              Choose Or Drop Paper Sheet File
-            </h3>
+              <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-600">
+                Drag a JPG, PNG, WEBP, or PDF here, or choose it below. Multi-page PDFs
+                can be scanned into one editable review table. Maximum file size is 10 MB.
+              </p>
 
-            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-600">
-              Drag a JPG, PNG, WEBP, or PDF here, or choose it below. Maximum
-              file size is 10 MB.
-            </p>
+              <input
+                id="paper-sheet-file-input"
+                type="file"
+                accept="image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf"
+                onChange={onFileChange}
+                className="mx-auto mt-6 block w-full max-w-2xl cursor-pointer rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-sm file:mr-4 file:rounded-xl file:border-0 file:bg-blue-600 file:px-4 file:py-2 file:font-bold file:text-white"
+              />
 
-            <input
-              id="paper-sheet-file-input"
-              type="file"
-              accept="image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf"
-              onChange={onFileChange}
-              className="mt-6 block w-full cursor-pointer rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-sm file:mr-4 file:rounded-xl file:border-0 file:bg-blue-600 file:px-4 file:py-2 file:font-bold file:text-white"
-            />
+              {uploadFile && (
+                <div className="mx-auto mt-4 w-full max-w-2xl rounded-2xl bg-white p-4 text-left ring-1 ring-slate-200">
+                  <p className="text-sm font-black text-slate-950">
+                    Selected File
+                  </p>
+                  <p className="mt-1 break-words text-sm text-slate-600">
+                    {uploadFile.name}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {formatFileSize(uploadFile.size)} • {uploadFile.type || "file"}
+                  </p>
+                </div>
+              )}
+            </div>
 
-            {uploadFile && (
-              <div className="mt-4 rounded-2xl bg-white p-4 text-left ring-1 ring-slate-200">
-                <p className="text-sm font-black text-slate-950">
-                  Selected File
-                </p>
-                <p className="mt-1 break-words text-sm text-slate-600">
-                  {uploadFile.name}
-                </p>
-                <p className="mt-1 text-xs font-semibold text-slate-500">
-                  {formatFileSize(uploadFile.size)} • {uploadFile.type || "file"}
-                </p>
+            <div className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+                <FormField label="Mileage Month">
+                  <input
+                    type="month"
+                    required
+                    value={uploadMonthKey}
+                    onChange={(event) => setUploadMonthKey(event.target.value)}
+                    className={inputClass}
+                  />
+                </FormField>
+
+                <FormField label="Worker">
+                  <input
+                    type="text"
+                    value={profile?.full_name || "Worker"}
+                    disabled
+                    className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 font-bold text-slate-500"
+                  />
+                </FormField>
               </div>
-            )}
+
+              <FormField label="Notes For Admin">
+                <textarea
+                  rows="6"
+                  value={uploadNotes}
+                  onChange={(event) => setUploadNotes(event.target.value)}
+                  placeholder="Example: This is my May mileage sheet. I circled one row that needs review."
+                  className="w-full resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                />
+              </FormField>
+
+              {uploadError && <AlertBox type="error" message={uploadError} />}
+              {uploadSuccess && <AlertBox type="success" message={uploadSuccess} />}
+
+              <button
+                type="submit"
+                disabled={uploadingSheet || !uploadFile}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-8 py-3 font-black text-white shadow-lg shadow-blue-200 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <FileUp size={19} />
+                {uploadingSheet ? "Uploading..." : "Upload Paper Sheet"}
+              </button>
+            </div>
           </div>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <FormField label="Mileage Month">
-              <input
-                type="month"
-                required
-                value={uploadMonthKey}
-                onChange={(event) => setUploadMonthKey(event.target.value)}
-                className={inputClass}
-              />
-            </FormField>
-
-            <FormField label="Worker">
-              <input
-                type="text"
-                value={profile?.full_name || "Worker"}
-                disabled
-                className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 font-bold text-slate-500"
-              />
-            </FormField>
-          </div>
-
-          <FormField label="Notes For Admin">
-            <textarea
-              rows="5"
-              value={uploadNotes}
-              onChange={(event) => setUploadNotes(event.target.value)}
-              placeholder="Example: This is my May mileage sheet. I circled one row that needs review."
-              className="w-full resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-            />
-          </FormField>
-
-          {uploadError && <AlertBox type="error" message={uploadError} />}
-          {uploadSuccess && <AlertBox type="success" message={uploadSuccess} />}
-
-          <button
-            type="submit"
-            disabled={uploadingSheet || !uploadFile}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-8 py-3 font-black text-white shadow-lg shadow-blue-200 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <FileUp size={19} />
-            {uploadingSheet ? "Uploading..." : "Upload Paper Sheet"}
-          </button>
         </form>
       </div>
 
-      <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200">
+      <div className="rounded-[2rem] bg-white p-6 shadow-sm ring-1 ring-slate-200 xl:p-8">
         <SectionTitle
           eyebrow="Upload History"
           title="Your Paper Sheets"
@@ -4579,6 +4585,16 @@ function UploadSheetView({
                         >
                           <FileUp size={14} />
                           Open
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={isSubmitted}
+                          onClick={() => onAddDraftRow(upload)}
+                          className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <Plus size={14} />
+                          Add Row
                         </button>
 
                         <button
@@ -4912,6 +4928,16 @@ function UploadSheetView({
                         Click Scan With AI to extract editable mileage rows
                         from the uploaded paper sheet.
                       </p>
+                      {!isSubmitted && (
+                        <button
+                          type="button"
+                          onClick={() => onAddDraftRow(upload)}
+                          className="mt-4 inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-black text-white shadow-sm transition hover:bg-blue-700"
+                        >
+                          <Plus size={14} />
+                          Add Row Manually
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
