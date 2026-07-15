@@ -195,10 +195,13 @@ export async function updateWorkerDefaultVehicle({
       message.includes("default_vehicle_name") ||
       message.includes("default_vehicle_id") ||
       message.includes("schema cache") ||
-      message.includes("column")
+      message.includes("column") ||
+      message.includes("permission denied") ||
+      message.includes("row-level security") ||
+      message.includes("rls")
     ) {
       throw new Error(
-        "Default vehicle setup is not installed in Supabase yet. Run the worker default vehicle SQL, then try saving again."
+        "Default vehicle permissions are not installed in Supabase yet. Run the worker default vehicle SQL, then try saving again."
       );
     }
 
