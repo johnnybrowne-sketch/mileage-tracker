@@ -2,6 +2,10 @@ import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseAuthStorage =
+  typeof window !== "undefined" && window.localStorage
+    ? window.localStorage
+    : undefined;
 
 if (!supabaseUrl) {
   throw new Error("Missing VITE_SUPABASE_URL in .env.local");
@@ -16,5 +20,6 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
+    storage: supabaseAuthStorage,
   },
 });

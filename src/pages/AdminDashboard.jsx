@@ -33,7 +33,10 @@ import { supabase } from "../lib/supabaseClient";
 import { askClaudeAssistant } from "../services/claudeAssistantService";
 import { invokeSupabaseFunction } from "../services/supabaseFunctionService";
 import { signOutUser } from "../services/authService";
-import { getProfileForUser } from "../services/profileService";
+import {
+  getProfileForUser,
+  updateWorkerDefaultVehicle,
+} from "../services/profileService";
 import { saveWorkerMileageEntry } from "../services/mileageService";
 import { getJobberVisitsForMonth } from "../services/jobberService";
 import {
@@ -211,6 +214,10 @@ export default function AdminDashboard() {
   const [messageDraft, setMessageDraft] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
   const [messageError, setMessageError] = useState("");
+  const [savingDefaultVehicleWorkerId, setSavingDefaultVehicleWorkerId] =
+    useState("");
+  const [workerVehicleMessage, setWorkerVehicleMessage] = useState("");
+  const [workerVehicleError, setWorkerVehicleError] = useState("");
 
   const [paperUploads, setPaperUploads] = useState([]);
   const [uploadStatusFilter, setUploadStatusFilter] = useState("all");
@@ -1096,6 +1103,87 @@ export default function AdminDashboard() {
     setSelectedVehicle("all");
   }
 
+  function getAdminVehicleStartFields(worker, effectiveVehicleName) {
+    if (!effectiveVehicleName) {
+      return {
+        startOdometer: "",
+        expectedStartOdometer: "",
+        usesSharedVehicleOdometer: false,
+        odometerOverrideReason: "",
+      };
+    }
+
+    const fallbackOdometer = getLatestEndOdometerForWorkerVehicle({
+      entries,
+      worker,
+      vehicleName: effectiveVehicleName,
+      workerMap,
+    });
+    const matchedVehicle = findVehicleByDisplayName(vehicles, effectiveVehicleName);
+    const odometerStart = getExpectedVehicleStart({
+      states: vehicleOdometerStates,
+      vehicle: matchedVehicle,
+      vehicleName: effectiveVehicleName,
+      fallbackOdometer,
+    });
+
+    return {
+      startOdometer: String(odometerStart.expectedStartOdometer || ""),
+      expectedStartOdometer: String(odometerStart.expectedStartOdometer || ""),
+      usesSharedVehicleOdometer: odometerStart.isSharedVehicle,
+      odometerOverrideReason: "",
+    };
+  }
+
+  async function handleSetWorkerDefaultVehicle(worker, vehicleName) {
+    if (!worker?.id) return;
+
+    const cleanVehicleName = String(vehicleName || "").trim();
+    const matchedVehicle = findVehicleByDisplayName(vehicles, cleanVehicleName);
+    const vehicleId =
+      matchedVehicle?.id || matchedVehicle?.base_vehicle_id || matchedVehicle?.vehicle_id || "";
+
+    setSavingDefaultVehicleWorkerId(worker.id);
+    setWorkerVehicleMessage("");
+    setWorkerVehicleError("");
+
+    try {
+      const updatedWorker = await updateWorkerDefaultVehicle({
+        workerId: worker.id,
+        vehicleName: cleanVehicleName,
+        vehicleId,
+      });
+
+      setWorkers((currentWorkers) =>
+        currentWorkers.map((currentWorker) => {
+          if (String(currentWorker.id) !== String(worker.id)) {
+            return currentWorker;
+          }
+
+          return {
+            ...currentWorker,
+            ...updatedWorker,
+            default_vehicle_name: cleanVehicleName || null,
+            default_vehicle_id: vehicleId || null,
+          };
+        })
+      );
+
+      setWorkerVehicleMessage(
+        cleanVehicleName
+          ? `Default vehicle saved for ${worker.full_name || worker.email || "worker"}.`
+          : `Default vehicle cleared for ${worker.full_name || worker.email || "worker"}.`
+      );
+    } catch (error) {
+      console.error(error);
+      setWorkerVehicleError(
+        getFriendlySupabaseError(error, "Unable to save the worker default vehicle.")
+      );
+    } finally {
+      setSavingDefaultVehicleWorkerId("");
+    }
+  }
+
   function updateAddForm(field, value) {
     if (field === "workerId") {
       setSelectedJobberVisit(null);
@@ -1109,13 +1197,27 @@ export default function AdminDashboard() {
 
       if (field === "workerId") {
         const worker = workers.find((item) => String(item.id) === String(value));
+        const defaultVehicleName = worker
+          ? getDefaultVehicleNameForWorker({
+              worker,
+              workers,
+              vehicles,
+              assignments,
+            })
+          : "";
+        const vehicleStartFields = getAdminVehicleStartFields(
+          worker,
+          defaultVehicleName
+        );
 
-        nextForm.vehicleName = worker ? getPersonalVehicleName(worker) : "";
+        nextForm.vehicleName = defaultVehicleName;
         nextForm.customVehicleName = "";
-        nextForm.startOdometer = "";
-        nextForm.expectedStartOdometer = "";
-        nextForm.usesSharedVehicleOdometer = false;
-        nextForm.odometerOverrideReason = "";
+        nextForm.startOdometer = vehicleStartFields.startOdometer;
+        nextForm.expectedStartOdometer = vehicleStartFields.expectedStartOdometer;
+        nextForm.usesSharedVehicleOdometer =
+          vehicleStartFields.usesSharedVehicleOdometer;
+        nextForm.odometerOverrideReason =
+          vehicleStartFields.odometerOverrideReason;
         nextForm.endOdometer = "";
       }
 
@@ -1237,7 +1339,14 @@ export default function AdminDashboard() {
       if (field === "workerId") {
         const worker = workers.find((item) => String(item.id) === String(value));
 
-        nextForm.vehicleName = worker ? getPersonalVehicleName(worker) : "";
+        nextForm.vehicleName = worker
+          ? getDefaultVehicleNameForWorker({
+              worker,
+              workers,
+              vehicles,
+              assignments,
+            })
+          : "";
       }
 
       return nextForm;
@@ -1582,7 +1691,15 @@ export default function AdminDashboard() {
       vehicles,
       assignments,
     }).filter((vehicleName) => vehicleName !== "all");
-    const defaultVehicleName = vehicleOptions[0] || "";
+    const defaultVehicleName =
+      getDefaultVehicleNameForWorker({
+        worker,
+        workers,
+        vehicles,
+        assignments,
+      }) ||
+      vehicleOptions[0] ||
+      "";
     const latestEndOdometer = getLatestEndOdometerForWorkerVehicle({
       entries,
       worker,
@@ -2805,6 +2922,12 @@ export default function AdminDashboard() {
                 entries={entries}
                 selectedMonth={selectedMonth}
                 workerMap={workerMap}
+                vehicles={vehicles}
+                assignments={assignments}
+                savingDefaultVehicleWorkerId={savingDefaultVehicleWorkerId}
+                workerVehicleMessage={workerVehicleMessage}
+                workerVehicleError={workerVehicleError}
+                onSetDefaultVehicle={handleSetWorkerDefaultVehicle}
                 setSelectedWorkerId={handleWorkerFilterChange}
                 setSelectedVehicle={setSelectedVehicle}
                 setActiveView={setActiveView}
@@ -4356,6 +4479,12 @@ function WorkersView({
   entries,
   selectedMonth,
   workerMap,
+  vehicles,
+  assignments,
+  savingDefaultVehicleWorkerId,
+  workerVehicleMessage,
+  workerVehicleError,
+  onSetDefaultVehicle,
   setSelectedWorkerId,
   setSelectedVehicle,
   setActiveView,
@@ -4431,9 +4560,21 @@ function WorkersView({
         </div>
       </div>
 
+      {(workerVehicleMessage || workerVehicleError) && (
+        <div
+          className={`mt-5 rounded-2xl border px-4 py-3 text-sm font-bold ${
+            workerVehicleError
+              ? "border-red-200 bg-red-50 text-red-700"
+              : "border-emerald-200 bg-emerald-50 text-emerald-700"
+          }`}
+        >
+          {workerVehicleError || workerVehicleMessage}
+        </div>
+      )}
+
       <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200">
         <div className="max-h-[680px] overflow-auto">
-          <table className="w-full min-w-[1000px] border-collapse text-left text-sm">
+          <table className="w-full min-w-[1200px] border-collapse text-left text-sm">
             <thead className="bg-slate-50 text-slate-600">
               <tr>
                 <TableHeader>Worker</TableHeader>
@@ -4442,6 +4583,7 @@ function WorkersView({
                 <TableHeader>Month Entries</TableHeader>
                 <TableHeader>Month Miles</TableHeader>
                 <TableHeader>Latest Vehicle</TableHeader>
+                <TableHeader>Default Vehicle</TableHeader>
                 <TableHeader>Action</TableHeader>
               </tr>
             </thead>
@@ -4489,6 +4631,36 @@ function WorkersView({
                   </td>
 
                   <td className="px-4 py-4">
+                    <select
+                      value={getSavedDefaultVehicleOptionForWorker({
+                        worker: summary.worker,
+                        workers,
+                        vehicles,
+                        assignments,
+                      })}
+                      disabled={savingDefaultVehicleWorkerId === summary.worker.id}
+                      onChange={(event) =>
+                        onSetDefaultVehicle(summary.worker, event.target.value)
+                      }
+                      className="h-10 w-64 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                    >
+                      <option value="">No default</option>
+                      {getVehicleOptionsForWorker({
+                        worker: summary.worker,
+                        workers,
+                        vehicles,
+                        assignments,
+                      })
+                        .filter((vehicleName) => vehicleName !== "all")
+                        .map((vehicleName) => (
+                          <option key={vehicleName} value={vehicleName}>
+                            {vehicleName}
+                          </option>
+                        ))}
+                    </select>
+                  </td>
+
+                  <td className="px-4 py-4">
                     <button
                       type="button"
                       onClick={() => reviewWorker(summary.worker.id)}
@@ -4502,7 +4674,7 @@ function WorkersView({
 
               {workerSummaries.length === 0 && (
                 <tr>
-                  <td colSpan="7" className="px-6 py-12">
+                  <td colSpan="8" className="px-6 py-12">
                     <EmptyState
                       title="No Workers Found"
                       text="Try another search term."
@@ -6523,10 +6695,14 @@ function PropertyCodeInput({
       .filter((property) => {
         const searchText = [
           property.property_code,
+          formatPropertyCodeForDisplay(property.property_code),
           property.house_number,
           property.street_name,
           property.street_type,
           property.city,
+          isProsperOfficeProperty(property)
+            ? "prosper office miscellaneous bank trulock errands"
+            : "",
           getPropertyDisplayLabel(property),
         ]
           .filter(Boolean)
@@ -6576,7 +6752,7 @@ function PropertyCodeInput({
                 className="w-full rounded-xl px-3 py-2 text-left transition hover:bg-blue-50"
               >
                 <p className="text-sm font-black text-slate-950">
-                  {property.property_code}
+                  {formatPropertyCodeForDisplay(property.property_code)}
                 </p>
                 <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
                   {getPropertyAddressLabel(property) ||
@@ -6628,6 +6804,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
       .filter((property) => {
         const searchText = [
           property.property_code,
+          formatPropertyCodeForDisplay(property.property_code),
           property.house_number,
           property.street_name,
           property.street_type,
@@ -6635,6 +6812,9 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
           property.zip_code,
           property.display_name,
           property.display_label,
+          isProsperOfficeProperty(property)
+            ? "prosper office miscellaneous bank trulock errands"
+            : "",
           getPropertyDisplayLabel(property),
         ]
           .filter(Boolean)
@@ -6671,8 +6851,8 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
         </span>
 
         <p className="mb-2 rounded-2xl bg-blue-50 px-3 py-2 text-xs font-bold leading-5 text-blue-700">
-          If the trip is related to Prosper Office work, select LIVEEC as the
-          property.
+          For miscellaneous office trips such as the bank, Trulock, or other
+          Prosper errands, select PROSPER as the property.
         </p>
 
         <div className="flex h-12 items-center rounded-2xl border border-slate-300 bg-white px-4 transition focus-within:border-blue-500 focus-within:ring-4 focus:ring-blue-100">
@@ -6694,7 +6874,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
 
       {selectedPropertyCode && selectedProperty && (
         <div className="mt-2 inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">
-          Selected: {selectedProperty.property_code}
+          Selected: {formatPropertyCodeForDisplay(selectedProperty.property_code)}
         </div>
       )}
 
@@ -6712,7 +6892,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <p className="font-black text-slate-950">
-                      {property.property_code}
+                      {formatPropertyCodeForDisplay(property.property_code)}
                     </p>
                     <p className="mt-1 text-sm leading-5 text-slate-600">
                       {getPropertyDisplayLabel(property)}
@@ -7224,11 +7404,16 @@ function getEntryVehicle(entry) {
 }
 
 function getEntryPropertyCode(entry) {
-  return entry.property_code || entry.property || "";
+  return formatPropertyCodeForDisplay(entry.property_code || entry.property || "");
 }
 
 function getEntryPropertyDisplay(entry) {
-  return entry.property_display || entry.property_name || entry.property_code || "";
+  return formatPropertyTextForDisplay(
+    entry.property_display ||
+      entry.property_name ||
+      formatPropertyCodeForDisplay(entry.property_code || entry.property || "") ||
+      ""
+  );
 }
 
 function hasJobberMileage(entry) {
@@ -7255,11 +7440,13 @@ function getResolvedEntryPropertyCode(entry, timesheet, properties = []) {
     "";
 
   if (hasJobberMileage(entry) || entry?.jobber_timesheet_id) {
-    return resolvePropertyCode({
-      address,
-      properties,
-      fallbackCode: getEntryPropertyCode(entry),
-    });
+    return formatPropertyCodeForDisplay(
+      resolvePropertyCode({
+        address,
+        properties,
+        fallbackCode: getEntryPropertyCode(entry),
+      })
+    );
   }
 
   return getEntryPropertyCode(entry);
@@ -7466,11 +7653,74 @@ function getPersonalVehicleName(worker) {
   return `Personal - ${worker?.full_name || "Worker"}`;
 }
 
+function getWorkerDefaultVehicleName(worker) {
+  return String(
+    worker?.default_vehicle_name ||
+      worker?.default_vehicle ||
+      worker?.preferred_vehicle ||
+      ""
+  ).trim();
+}
+
+function getSavedDefaultVehicleOptionForWorker({
+  worker,
+  workers,
+  vehicles,
+  assignments,
+}) {
+  const savedVehicleName = getWorkerDefaultVehicleName(worker);
+
+  if (!savedVehicleName) {
+    return "";
+  }
+
+  const vehicleOptions = getVehicleOptionsForWorker({
+    worker,
+    workers,
+    vehicles,
+    assignments,
+  }).filter((vehicleName) => vehicleName !== "all");
+
+  return (
+    vehicleOptions.find((vehicleName) => {
+      return normalizeText(vehicleName) === normalizeText(savedVehicleName);
+    }) || savedVehicleName
+  );
+}
+
+function getDefaultVehicleNameForWorker({
+  worker,
+  workers,
+  vehicles,
+  assignments,
+}) {
+  const savedVehicleName = getSavedDefaultVehicleOptionForWorker({
+    worker,
+    workers,
+    vehicles,
+    assignments,
+  });
+
+  if (savedVehicleName) {
+    return savedVehicleName;
+  }
+
+  return (
+    getVehicleOptionsForWorker({
+      worker,
+      workers,
+      vehicles,
+      assignments,
+    }).find((vehicleName) => vehicleName !== "all") || ""
+  );
+}
+
 function getVehicleOptionsForWorker({ worker, workers, vehicles, assignments }) {
   const options = ["all"];
 
   if (worker) {
     options.push(getPersonalVehicleName(worker));
+    options.push(getWorkerDefaultVehicleName(worker));
 
     const assignedVehicleIds = new Set(
       assignments
@@ -7570,9 +7820,10 @@ function isPersonalVehicleLabel(value) {
 function getPropertyDisplayLabel(property) {
   if (!property) return "";
 
-  if (property.display_label) return property.display_label;
-  if (property.display_name) return property.display_name;
+  if (property.display_label) return formatPropertyTextForDisplay(property.display_label);
+  if (property.display_name) return formatPropertyTextForDisplay(property.display_name);
 
+  const propertyCode = formatPropertyCodeForDisplay(property.property_code);
   const address = [
     property.house_number,
     property.street_name,
@@ -7583,10 +7834,10 @@ function getPropertyDisplayLabel(property) {
     .join(" ");
 
   if (address) {
-    return `${property.property_code || ""} ${address}`.trim();
+    return `${propertyCode || ""} ${address}`.trim();
   }
 
-  return property.property_code || "";
+  return propertyCode || "";
 }
 
 function getPropertyAddressLabel(property) {
@@ -7605,7 +7856,12 @@ function getPropertyAddressLabel(property) {
     return `${address}, ${property.city}`;
   }
 
-  return address || property.display_name || property.display_label || "";
+  return (
+    address ||
+    formatPropertyTextForDisplay(property.display_name) ||
+    formatPropertyTextForDisplay(property.display_label) ||
+    ""
+  );
 }
 
 function findPropertyByCode(properties, propertyCode) {
@@ -7615,12 +7871,37 @@ function findPropertyByCode(properties, propertyCode) {
 
   return (
     (properties || []).find((property) => {
+      const savedCode = String(property.property_code || "").trim().toUpperCase();
+      const displayCode = formatPropertyCodeForDisplay(savedCode).toUpperCase();
+
       return (
-        String(property.property_code || "").trim().toUpperCase() ===
-        normalizedCode
+        savedCode === normalizedCode ||
+        displayCode === normalizedCode ||
+        (normalizedCode === "PROSPER" && savedCode === "LIVEEC")
       );
     }) || null
   );
+}
+
+function formatPropertyCodeForDisplay(propertyCode) {
+  const cleanCode = String(propertyCode || "").trim();
+
+  if (cleanCode.toUpperCase() === "LIVEEC") {
+    return "PROSPER";
+  }
+
+  return cleanCode;
+}
+
+function formatPropertyTextForDisplay(value) {
+  return String(value || "").replace(/\bLIVEEC\b/gi, "PROSPER");
+}
+
+function isProsperOfficeProperty(property) {
+  const propertyCode = String(property?.property_code || "").trim().toUpperCase();
+  const displayCode = formatPropertyCodeForDisplay(propertyCode).toUpperCase();
+
+  return propertyCode === "LIVEEC" || displayCode === "PROSPER";
 }
 
 function getDraftRowPropertyAddress(row, properties) {

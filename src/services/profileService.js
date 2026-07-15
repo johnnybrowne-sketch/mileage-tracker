@@ -166,6 +166,48 @@ export async function createOrUpdateWorkerProfileForUser({ user, fullName }) {
   return data;
 }
 
+export async function updateWorkerDefaultVehicle({
+  workerId,
+  vehicleName,
+  vehicleId,
+}) {
+  if (!workerId) {
+    throw new Error("Worker is required.");
+  }
+
+  const cleanVehicleName = String(vehicleName || "").trim();
+  const cleanVehicleId = String(vehicleId || "").trim();
+
+  const { data, error } = await supabase
+    .from("worker_profiles")
+    .update({
+      default_vehicle_name: cleanVehicleName || null,
+      default_vehicle_id: cleanVehicleId || null,
+    })
+    .eq("id", workerId)
+    .select("*")
+    .single();
+
+  if (error) {
+    const message = String(error.message || "");
+
+    if (
+      message.includes("default_vehicle_name") ||
+      message.includes("default_vehicle_id") ||
+      message.includes("schema cache") ||
+      message.includes("column")
+    ) {
+      throw new Error(
+        "Default vehicle setup is not installed in Supabase yet. Run the worker default vehicle SQL, then try saving again."
+      );
+    }
+
+    throw error;
+  }
+
+  return data;
+}
+
 export function isAdminProfile(profile) {
   return profile?.role === "admin";
 }

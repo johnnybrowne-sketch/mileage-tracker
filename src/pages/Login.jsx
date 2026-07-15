@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowRight,
@@ -19,6 +19,7 @@ import {
   Upload,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
+import { getProfileForUser, isAdminProfile } from "../services/profileService";
 
 const logoSrc = "/prosper-logo.svg";
 
@@ -30,6 +31,41 @@ export default function Login() {
 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function redirectExistingSession() {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!isMounted || !session?.user) return;
+
+        const profile = await getProfileForUser(session.user);
+
+        if (!isMounted) return;
+
+        if (!profile) {
+          navigate("/onboarding", { replace: true });
+          return;
+        }
+
+        navigate(isAdminProfile(profile) ? "/admin" : "/worker", {
+          replace: true,
+        });
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    redirectExistingSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [navigate]);
 
   async function handleLogin(event) {
     event.preventDefault();

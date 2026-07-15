@@ -456,7 +456,10 @@ export default function WorkerDashboard() {
       );
 
       if (workerVehicles.length > 0) {
-        const defaultVehicle = workerVehicles[0];
+        const defaultVehicle = getPreferredWorkerVehicle(
+          workerVehicles,
+          workerProfile
+        );
         const defaultVehicleName = getWorkerVehicleDisplayName(
           defaultVehicle,
           workerProfile
@@ -931,7 +934,7 @@ export default function WorkerDashboard() {
   }
 
   function openTimesheetMileageForm(timesheet) {
-    const defaultVehicle = vehicles[0] || null;
+    const defaultVehicle = getPreferredWorkerVehicle(vehicles, profile);
     const defaultVehicleName = defaultVehicle
       ? getWorkerVehicleDisplayName(defaultVehicle, profile)
       : "";
@@ -3702,10 +3705,14 @@ function PropertyCodeInput({
       .filter((property) => {
         const searchText = [
           property.property_code,
+          formatPropertyCodeForDisplay(property.property_code),
           property.house_number,
           property.street_name,
           property.street_type,
           property.city,
+          isProsperOfficeProperty(property)
+            ? "prosper office miscellaneous bank trulock errands"
+            : "",
           getPropertyDisplayLabel(property),
         ]
           .filter(Boolean)
@@ -3755,7 +3762,7 @@ function PropertyCodeInput({
                 className="w-full rounded-xl px-3 py-2 text-left transition hover:bg-blue-50"
               >
                 <p className="text-sm font-black text-slate-950">
-                  {property.property_code}
+                  {formatPropertyCodeForDisplay(property.property_code)}
                 </p>
                 <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
                   {getPropertyAddressLabel(property) ||
@@ -3807,6 +3814,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
       .filter((property) => {
         const searchText = [
           property.property_code,
+          formatPropertyCodeForDisplay(property.property_code),
           property.house_number,
           property.street_name,
           property.street_type,
@@ -3814,6 +3822,9 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
           property.zip_code,
           property.display_name,
           property.display_label,
+          isProsperOfficeProperty(property)
+            ? "prosper office miscellaneous bank trulock errands"
+            : "",
           getPropertyDisplayLabel(property),
         ]
           .filter(Boolean)
@@ -3849,9 +3860,9 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
           Prosper Office Mileage Note
         </p>
         <p className="mt-1 text-sm leading-6 text-amber-800">
-          If this trip is related to Prosper Office work, select{" "}
-          <span className="font-black">LIVEEC</span> as the property. This helps
-          assign the mileage correctly to Prosper Office.
+          For miscellaneous office trips such as the bank, Trulock, or other
+          Prosper errands, select <span className="font-black">PROSPER</span>{" "}
+          as the property.
         </p>
       </div>
 
@@ -3879,7 +3890,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
 
       {selectedPropertyCode && selectedProperty && (
         <div className="mt-2 inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">
-          Selected: {selectedProperty.property_code}
+          Selected: {formatPropertyCodeForDisplay(selectedProperty.property_code)}
         </div>
       )}
 
@@ -3897,7 +3908,7 @@ function PropertyAutocomplete({ properties, selectedPropertyCode, onSelect }) {
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <p className="font-black text-slate-950">
-                      {property.property_code}
+                      {formatPropertyCodeForDisplay(property.property_code)}
                     </p>
                     <p className="mt-1 text-sm leading-5 text-slate-600">
                       {getPropertyDisplayLabel(property)}
@@ -6438,6 +6449,35 @@ function getWorkerVehicleDisplayName(vehicle, profile) {
   return formatVehicleNameForDisplay(vehicleName, profile);
 }
 
+function getWorkerDefaultVehicleName(profile) {
+  return String(
+    profile?.default_vehicle_name ||
+      profile?.default_vehicle ||
+      profile?.preferred_vehicle ||
+      ""
+  ).trim();
+}
+
+function getPreferredWorkerVehicle(vehicles, profile) {
+  const savedVehicleName = getWorkerDefaultVehicleName(profile);
+  const savedVehicleId = String(profile?.default_vehicle_id || "").trim();
+
+  return (
+    findWorkerVehicleByDisplayName(vehicles, savedVehicleName, profile) ||
+    (savedVehicleId
+      ? (vehicles || []).find((vehicle) => {
+          return (
+            String(vehicle.id || "") === savedVehicleId ||
+            String(vehicle.base_vehicle_id || "") === savedVehicleId ||
+            String(vehicle.vehicle_id || "") === savedVehicleId
+          );
+        })
+      : null) ||
+    (vehicles || [])[0] ||
+    null
+  );
+}
+
 function getWorkerFormVehicleName(form, vehicles, profile) {
   if (form?.vehicleId === OTHER_COMPANY_VEHICLE_ID) {
     return String(form.customVehicleName || "").trim();
@@ -6726,13 +6766,14 @@ function getPropertyDisplayLabel(property) {
   }
 
   if (property.display_label) {
-    return property.display_label;
+    return formatPropertyTextForDisplay(property.display_label);
   }
 
   if (property.display_name) {
-    return property.display_name;
+    return formatPropertyTextForDisplay(property.display_name);
   }
 
+  const propertyCode = formatPropertyCodeForDisplay(property.property_code);
   const address = [
     property.house_number,
     property.street_name,
@@ -6743,10 +6784,10 @@ function getPropertyDisplayLabel(property) {
     .join(" ");
 
   if (address) {
-    return `${property.property_code || ""} ${address}`.trim();
+    return `${propertyCode || ""} ${address}`.trim();
   }
 
-  return property.property_code || "";
+  return propertyCode || "";
 }
 
 function getPropertyAddressLabel(property) {
@@ -6767,7 +6808,12 @@ function getPropertyAddressLabel(property) {
     return `${address}, ${property.city}`;
   }
 
-  return address || property.display_name || property.display_label || "";
+  return (
+    address ||
+    formatPropertyTextForDisplay(property.display_name) ||
+    formatPropertyTextForDisplay(property.display_label) ||
+    ""
+  );
 }
 
 function findPropertyByCode(properties, propertyCode) {
@@ -6779,12 +6825,37 @@ function findPropertyByCode(properties, propertyCode) {
 
   return (
     (properties || []).find((property) => {
+      const savedCode = String(property.property_code || "").trim().toUpperCase();
+      const displayCode = formatPropertyCodeForDisplay(savedCode).toUpperCase();
+
       return (
-        String(property.property_code || "").trim().toUpperCase() ===
-        normalizedCode
+        savedCode === normalizedCode ||
+        displayCode === normalizedCode ||
+        (normalizedCode === "PROSPER" && savedCode === "LIVEEC")
       );
     }) || null
   );
+}
+
+function formatPropertyCodeForDisplay(propertyCode) {
+  const cleanCode = String(propertyCode || "").trim();
+
+  if (cleanCode.toUpperCase() === "LIVEEC") {
+    return "PROSPER";
+  }
+
+  return cleanCode;
+}
+
+function formatPropertyTextForDisplay(value) {
+  return String(value || "").replace(/\bLIVEEC\b/gi, "PROSPER");
+}
+
+function isProsperOfficeProperty(property) {
+  const propertyCode = String(property?.property_code || "").trim().toUpperCase();
+  const displayCode = formatPropertyCodeForDisplay(propertyCode).toUpperCase();
+
+  return propertyCode === "LIVEEC" || displayCode === "PROSPER";
 }
 
 function removePropertyReviewNotes(reviewNotes) {
@@ -6959,16 +7030,15 @@ function getEntryVehicle(entry) {
 }
 
 function getEntryPropertyCode(entry) {
-  return entry?.property_code || entry?.property || "";
+  return formatPropertyCodeForDisplay(entry?.property_code || entry?.property || "");
 }
 
 function getEntryPropertyDisplay(entry) {
-  return (
+  return formatPropertyTextForDisplay(
     entry?.property_display ||
-    entry?.property_name ||
-    entry?.property_code ||
-    entry?.property ||
-    ""
+      entry?.property_name ||
+      formatPropertyCodeForDisplay(entry?.property_code || entry?.property || "") ||
+      ""
   );
 }
 
@@ -6996,11 +7066,13 @@ function getResolvedEntryPropertyCode(entry, timesheet, properties = []) {
     "";
 
   if (hasJobberMileage(entry) || entry?.jobber_timesheet_id) {
-    return resolvePropertyCode({
-      address,
-      properties,
-      fallbackCode: getEntryPropertyCode(entry),
-    });
+    return formatPropertyCodeForDisplay(
+      resolvePropertyCode({
+        address,
+        properties,
+        fallbackCode: getEntryPropertyCode(entry),
+      })
+    );
   }
 
   return getEntryPropertyCode(entry);
